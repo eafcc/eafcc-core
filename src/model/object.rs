@@ -1,0 +1,2 @@
+
+pub type ObjectID = String;
