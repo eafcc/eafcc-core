@@ -1,0 +1,13 @@
+{
+	"version": 1,
+	"kind": "Rule",
+	"meta": {
+		"name": "/your/awesome/path/rule-name-1",
+		"desc": "balabalabala",
+		"tags": ["foo", "bar"]
+	},
+	"spec": {
+		"rule": "str == \"123\" && int == -345 || ( float == -1.234 && ! ( str in [ \"123\" , \"456\"] ) )"
+	}
+	
+}

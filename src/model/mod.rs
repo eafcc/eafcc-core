@@ -13,7 +13,7 @@ pub struct RootCommon {
 }
 
 
-mod rule;
-mod link;
-mod object;
-mod res;
+pub mod rule;
+pub mod link;
+pub mod object;
+pub mod res;

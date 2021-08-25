@@ -5,7 +5,13 @@ use crate::error::DataLoaderError;
 use super::object::ObjectID;
 
 use std::collections::BTreeMap;
+use super::RootCommon;
 
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct LinkMeta {
+    pub desc: String,
+    pub tags: Vec<String>,
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct LinkSpec {
@@ -17,20 +23,9 @@ pub struct LinkSpec {
 }
 
 pub struct LinkTarget {
-	target: Vec<ObjectID>,
-	pri: f32,
-	is_neg: bool,
+	pub target: Vec<ObjectID>,
+	pub pri: f32,
+	pub is_neg: bool,
+	pub link_id: String, 
 }
 
-pub struct LinkStorage{
-	idx_rule_to_res: BTreeMap<String, LinkTarget>,
-
-}
-
-impl LinkStorage {
-
-}
-
-// pub load_link() {
-
-// }

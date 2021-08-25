@@ -1,5 +1,6 @@
 use serde_json;
 use thiserror::Error;
+use std::sync::{PoisonError};
 
 // 顶级Error
 #[derive(Error, Debug)]
@@ -17,5 +18,15 @@ pub enum DataLoaderError {
 	},
 	#[error("error parse `spec` part in config: {0}")]
 	SpecParseError(String),
+
+	#[error("Path or ObjectID not found: {0}")]
+	ObjectNotFoundError(String),
+
+
 }
 
+#[derive(Error, Debug)]
+pub enum DataMemStorageError {
+	#[error("error store data to memory: {0}")]
+	CustomError(String),
+}

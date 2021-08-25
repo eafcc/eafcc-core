@@ -3,7 +3,6 @@ use std::collections::HashMap;
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct RuleMeta {
-    pub name: String,
     pub desc: String,
     pub tags: Vec<String>,
 }

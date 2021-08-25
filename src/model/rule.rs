@@ -1,13 +1,16 @@
 use super::RootCommon;
-use crate::error::DataLoaderError;
+use crate::error::{DataLoaderError, DataMemStorageError};
 use crate::parser::rule;
 use crate::rule_engine::{Condition, LeafOperator, Value};
 use crate::rule_engine::{Rule, RuleMeta, RuleSpec};
-use serde::{Deserialize, Serialize};
 use serde_json;
+use std::collections::BTreeMap;
+use std::io::Seek;
+use std::rc::Rc;
+use std::sync::RwLock;
 
-fn load_rule(rule_data: &str) -> Result<Rule, DataLoaderError> {
-    let root = serde_json::from_str::<RootCommon>(rule_data)?;
+pub fn load_rule(rule_data: &[u8]) -> Result<Rule, DataLoaderError> {
+    let root = serde_json::from_slice::<RootCommon>(rule_data)?;
     let meta = serde_json::from_value::<RuleMeta>(root.meta)?;
 
     if let Some(v) = root.spec.pointer("/rule") {
@@ -29,6 +32,9 @@ fn load_rule(rule_data: &str) -> Result<Rule, DataLoaderError> {
     ));
 }
 
+
+
+
 #[test]
 fn test_load_rule() {
     let rule = r#"
@@ -36,7 +42,6 @@ fn test_load_rule() {
 		"version": 1,
 		"kind": "Rule",
 		"meta": {
-			"name": "/your/awesome/path/rule-name-1",
 			"desc": "balabalabala",
 			"tags": ["foo", "bar"]
 		},
@@ -47,12 +52,11 @@ fn test_load_rule() {
 	}
 	"#;
 
-    let r = load_rule(rule).unwrap();
+    let r = load_rule(rule.as_bytes()).unwrap();
     assert_eq!(
         r,
         Rule {
             meta: RuleMeta {
-                name: "/your/awesome/path/rule-name-1".into(),
                 desc: "balabalabala".into(),
                 tags: vec!["foo".into(), "bar".into()],
             },
