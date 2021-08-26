@@ -19,6 +19,7 @@ pub struct LinkSpec {
 	pub is_neg: bool,
 	pub ver: String,
 	pub rule: String,
+	#[serde(rename = "res")]
 	pub reses: Vec<String>,
 }
 

@@ -33,7 +33,7 @@ impl StorageBackend for FilesystemBackend {
 		let path = Path::new(str::from_utf8(hash).map_err(|_|std::io::Error::new(std::io::ErrorKind::Other, "invalid path"))?);
 		fs::read(path)
 	}
-
+	
 	fn list_dir(&self, version: &str, path: &str) -> Result<Vec<DirItem>>{
 		let mut ret = Vec::new();
 		
@@ -62,6 +62,23 @@ impl StorageBackend for FilesystemBackend {
 
 		return Ok(ret)
 	}
+
+	fn get_hash_by_path(&self, version: &str, path: &str) -> Result<ObjectID>{
+		let path = if path.starts_with("/") {
+			self.base_path.join(&path[1..])
+		} else {
+			self.base_path.join(path)
+		};
+		if let Ok(m) = fs::metadata(&path) {
+			if m.is_file() {
+				return Ok(Vec::from(path.to_str().ok_or(std::io::Error::new(std::io::ErrorKind::Other, "invalid path"))?));
+			}
+			
+		}
+		return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not exist or not a file"))
+	}
+
+
 	fn set_update_cb(&mut self, cb: fn(Vec<StorageChangeEvent>)){
 		
 	}

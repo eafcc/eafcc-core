@@ -5,9 +5,9 @@ use crate::storage_backends;
 
 use crate::error::{DataLoaderError, DataMemStorageError};
 use crate::model::object::{ObjectID, ObjectIDRef};
-use crate::rule_engine::{Rule, RuleMeta, RuleSpec};
+use crate::rule_engine::{Rule, RuleMeta, RuleSpec, Value};
 use serde::{Deserialize, Serialize};
-use serde_json;
+use serde_json::{self, json};
 
 use crate::cfg_center::CFGCenter;
 use crate::model::RootCommon;
@@ -36,6 +36,10 @@ where
         let meta = serde_json::from_value::<LinkMeta>(root.meta)?;
         let spec = serde_json::from_value::<LinkSpec>(root.spec)?;
 
+		if !spec.pri.is_finite() {
+			return Err(DataLoaderError::SpecParseError("pri field is not a valid float number".to_string()))
+		}
+
         let mut target = LinkTarget {
             pri: spec.pri,
             is_neg: spec.is_neg,
@@ -45,55 +49,52 @@ where
 
         // load all res that this rule depends on
         for res in spec.reses.iter() {
-			if res.starts_with("path:") {
+			if res.starts_with("path:/")  && res.len() > 6 {
 				let res = &res[5..];
-				let rule_list = cc
+				let oid = cc
 					.backend
-					.list_dir("master", res)
+					.get_hash_by_path("master", &("/reses".to_string() + &res))
 					.map_err(|_| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
 
-				let res_target = rule_list
-					.first()
-					.ok_or_else(|| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
 
 				// the following function call will increase the reference counter
 				cc.res_stor
-					.load_or_ref_res(&res_target.hash, |key| {
+					.load_or_ref_res(&oid, |key| {
 						let res_raw_data = cc.backend.get_obj_by_hash(key).unwrap();
 						let root = serde_json::from_slice::<RootCommon>(&res_raw_data).unwrap();
 						let meta = serde_json::from_value::<ResMeta>(root.meta).unwrap();
 						let spec = serde_json::from_value::<ResSpec>(root.spec).unwrap();
-						return Resource {};
+						let value = serde_json::from_str(&spec.data).unwrap();
+						return Resource {
+							data: value,
+						};
 					})
 					.map_err(|_| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
 
-				target.target.push(res_target.hash.to_vec());
+				target.target.push(oid);
 			} else {
 				return Err(DataLoaderError::ObjectNotFoundError("only support find object by path".to_string()))
 			}
         }
 
+		
         // the following function call will increase the reference counter
-		if spec.rule.starts_with("path:") && spec.rule.len() > 5 {
+		if spec.rule.starts_with("path:/") && spec.rule.len() > 6 {
 			let rule = &spec.rule[5..];
 			cc.rule_stor
 				.load_or_ref_rule(rule, |key| {
-					let rule_list = cc
+					let oid = cc
 						.backend
-						.list_dir("master", key)
+						.get_hash_by_path("master", &("/rules".to_string() + key))
 						.map_err(|_| DataLoaderError::ObjectNotFoundError(key.to_owned())).unwrap();
 
-					let res_target = rule_list
-						.get(0)
-						.ok_or_else(|| DataLoaderError::ObjectNotFoundError(key.to_owned())).unwrap();
-
-					let res_raw_data = cc.backend.get_obj_by_hash(&res_target.hash).unwrap();
+					let res_raw_data = cc.backend.get_obj_by_hash(&oid).unwrap();
 
 					return load_rule(&res_raw_data).unwrap()
 				})
 				.map_err(|_| DataLoaderError::ObjectNotFoundError((rule).to_owned()))?;
 
-			cc.link_stor.add_rule(spec.rule, target);
+			cc.link_stor.add_rule(rule.to_string(), target);
 		} else {
 			return Err(DataLoaderError::ObjectNotFoundError("only support find object by path".to_string()))
 		}
@@ -112,12 +113,13 @@ where
                     continue;
                 }
                 let rule_raw_data = cc.backend.get_obj_by_hash(&cur_node.hash).unwrap();
-                Self::load_by_link(&cur_node.name, &rule_raw_data, cc);
+                Self::load_by_link(&cur_node.name, &rule_raw_data, cc).unwrap();
             }
         }
     }
 }
 
+#[derive(Debug)]
 struct StorageEntry<T> {
     counter: usize,
     data: T,
@@ -171,13 +173,68 @@ impl RuleStorage {
             .storage
             .read()
             .map_err(|e| DataMemStorageError::CustomError(e.to_string())).unwrap();
-		storage.range(prefix.to_string()..=prefix.to_string()).for_each(|(k,v)|{
+		for (k,v) in storage.range(prefix.to_string()..) {
+			if !k.starts_with(prefix) {
+				break
+			}
 			cb(k,&v.data)
-		});
+		}
 	}
 }
 
-struct Resource {}
+pub struct Resource {
+	data: serde_json::Value,
+}
+
+impl Resource {
+	pub fn get(&self, path: &str) -> Option<Value> {
+		let mut t = &self.data;
+		let mut consumed_path = 0;
+		
+		for seg in path.split("/") {
+			match t {
+				serde_json::Value::Object(o) => {
+					match o.get(seg) {
+						Some(v) => t = v,
+						None => return None,
+					}
+				},
+				serde_json::Value::Array(a) => {
+					if let Ok(i) = seg.parse::<usize>() {
+						match a.get(i) {
+							Some(v) => t = v,
+							None => return None,
+						}
+					} else {
+						return None
+					}
+				},
+				_ => return None
+			}
+		}
+		match t {
+			serde_json::Value::Bool(b) => {
+				return Some(Value::Bool(*b))
+			},
+			serde_json::Value::Null => {
+				return Some(Value::Null)
+			},
+			serde_json::Value::Number(n) => {
+				if let Some(n) = n.as_f64() {
+					return Some(Value::Float(n))
+				} else {
+					return None
+				}
+			},
+			serde_json::Value::String(s) => {
+				return Some(Value::Str(s.to_owned()))
+			},
+			_ => None
+		}
+	}
+
+
+}
 
 pub struct ResStorage {
     storage: RwLock<HashMap<Vec<u8>, StorageEntry<Resource>>>,
@@ -219,6 +276,23 @@ impl ResStorage {
         }
         Ok(())
     }
+
+	pub fn batch_get_res<F: FnMut(&Resource) -> bool>(&self, s: &Vec<ObjectID>, mut cb: F) {
+		// let mut ret = Vec::new();
+
+		let storage = self
+		.storage
+		.read()
+		.map_err(|e| DataMemStorageError::CustomError(e.to_string())).unwrap();
+
+		for oid in s {
+			let val =  storage.get(oid).unwrap();
+			if cb(&val.data) {
+				break;
+			}
+		}
+		
+	}
 }
 
 pub struct LinkStorage {
@@ -242,7 +316,7 @@ impl LinkStorage {
         return Ok(());
     }
 
-	pub fn batch_get_targets<F: Fn(Vec<&LinkTarget>)>(&self, s: Vec<String>, cb: F) {
+	pub fn batch_get_targets<F: FnMut(Vec<&LinkTarget>)>(&self, s: Vec<String>, mut cb: F) {
 		let mut ret = Vec::new();
 
 		let storage = self

@@ -11,7 +11,7 @@
 		"ver": "latest:<branch_name>",  
 		"rule": "path:/foo/bar/1.json",  
 		"res":[
-			"path:/data1.json" 
+			"path:/foo/bar/1.json" 
 		]
 	}
 }

@@ -4,6 +4,7 @@ mod error;
 mod parser;
 mod storage_backends;
 mod cfg_center;
+mod ffi;
 #[cfg(test)]
 mod tests {
     #[test]
