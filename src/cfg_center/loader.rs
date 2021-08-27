@@ -17,21 +17,17 @@ use std::rc::Rc;
 use std::sync::RwLock;
 use std::collections::btree_map::Range;
 
-pub struct Loader<B> {
-    _phantom: PhantomData<B>,
+pub struct Loader {
+
 }
 
-impl<B> Loader<B>
-where
-    B: storage_backends::StorageBackend,
-{
+impl Loader{
     pub fn new() -> Self {
         return Self {
-            _phantom: PhantomData,
         };
     }
 
-    pub fn load_by_link(link_id: &str, link_data: &[u8], cc: &CFGCenter<B>) -> Result<(), DataLoaderError> {
+    pub fn load_by_link(link_id: &str, link_data: &[u8], cc: &CFGCenter) -> Result<(), DataLoaderError> {
         let root = serde_json::from_slice::<RootCommon>(link_data)?;
         let meta = serde_json::from_value::<LinkMeta>(root.meta)?;
         let spec = serde_json::from_value::<LinkSpec>(root.spec)?;
@@ -102,7 +98,7 @@ where
         return Ok(());
     }
 
-    pub fn load_data(&self, cc: &CFGCenter<B>) {
+    pub fn load_data(&self, cc: &CFGCenter) {
         let mut nodes_to_visit: Vec<String> = Vec::with_capacity(32);
         nodes_to_visit.push("/links/".to_string());
         while let Some(ref parent_node) = nodes_to_visit.pop() {

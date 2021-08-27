@@ -12,19 +12,16 @@ use crate::storage_backends;
 use crate::storage_backends::filesystem;
 
 // mod config_path_spliter;
-pub struct CFGCenter<B> {
-    backend: B,
-    loader: loader::Loader<B>,
+pub struct CFGCenter {
+    backend: Box<dyn storage_backends::StorageBackend>,
+    loader: loader::Loader,
     rule_stor: loader::RuleStorage,
     res_stor: loader::ResStorage,
     link_stor: loader::LinkStorage,
 }
 
-impl<B> CFGCenter<B>
-where
-    B: storage_backends::StorageBackend,
-{
-    pub fn new(backend: B) -> Self {
+impl CFGCenter {
+    pub fn new(backend: Box<dyn storage_backends::StorageBackend>) -> Self {
         return Self {
             backend,
             loader: loader::Loader::new(),
@@ -98,7 +95,7 @@ fn test_load_res_and_query() {
         .join("test")
         .join("mock_data")
         .join("filesystem_backend");
-    let backend = filesystem::FilesystemBackend::new(base_path);
+    let backend = Box::new(filesystem::FilesystemBackend::new(base_path));
     let cc = CFGCenter::new(backend);
     cc.loader.load_data(&cc);
 
