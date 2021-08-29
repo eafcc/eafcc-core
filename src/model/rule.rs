@@ -46,9 +46,8 @@ fn test_load_rule() {
 			"tags": ["foo", "bar"]
 		},
 		"spec": {
-			"rule": "str == \"123\" && int == -345 || ( float == -1.234 && ! ( str in [ \"123\" , \"456\"] ) )"
+			"rule": "str == \"123\" && int == \"-345\" || ( float == \"-1.234\" && ! ( str == \"123\" ) )"
 		}
-		
 	}
 	"#;
 
@@ -71,22 +70,21 @@ fn test_load_rule() {
                         Condition::Leaf {
                             lhs: "int".into(),
                             op: LeafOperator::Eq,
-                            rhs: Some(Value::Int(-345,),),
+                            rhs: Some(Value::Str("-345".into()),),
                         },
                     ],),
                     Condition::And(vec![
                         Condition::Leaf {
                             lhs: "float".into(),
                             op: LeafOperator::Eq,
-                            rhs: Some(Value::Float(-1.234,),),
+                            rhs: Some(Value::Str("-1.234".into()),),
                         },
                         Condition::Not(Box::new(Condition::Leaf {
                             lhs: "str".into(),
-                            op: LeafOperator::InList,
-                            rhs: Some(Value::List(vec![
+                            op: LeafOperator::Eq,
+                            rhs: Some(
                                 Value::Str("123".into(),),
-                                Value::Str("456".into(),),
-                            ],),),
+                            ),
                         }),),
                     ],),
                 ],),

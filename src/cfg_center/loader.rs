@@ -60,9 +60,10 @@ impl Loader{
 						let root = serde_json::from_slice::<RootCommon>(&res_raw_data).unwrap();
 						let meta = serde_json::from_value::<ResMeta>(root.meta).unwrap();
 						let spec = serde_json::from_value::<ResSpec>(root.spec).unwrap();
-						let value = serde_json::from_str(&spec.data).unwrap();
 						return Resource {
-							data: value,
+                            content_type: spec.content_type,
+                            key: spec.key,
+							data: spec.data,
 						};
 					})
 					.map_err(|_| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
@@ -164,73 +165,23 @@ impl RuleStorage {
         Ok(())
     }
 
-	pub fn iter_with_prefix<F:FnMut(&String, &Rule)>(&self, prefix: &str, mut cb: F)  {
+	pub fn iter_with_prefix<F:FnMut(&String, &Rule)>(&self, mut cb: F)  {
 		let mut storage = self
             .storage
             .read()
             .map_err(|e| DataMemStorageError::CustomError(e.to_string())).unwrap();
-		for (k,v) in storage.range(prefix.to_string()..) {
-			if !k.starts_with(prefix) {
-				break
-			}
+		for (k,v) in storage.iter() {
 			cb(k,&v.data)
 		}
 	}
 }
 
 pub struct Resource {
-	data: serde_json::Value,
+    pub content_type: String,
+    pub key: String,
+	pub data: String,
 }
 
-impl Resource {
-	pub fn get(&self, path: &str) -> Option<Value> {
-		let mut t = &self.data;
-		let mut consumed_path = 0;
-		
-		for seg in path.split("/") {
-			match t {
-				serde_json::Value::Object(o) => {
-					match o.get(seg) {
-						Some(v) => t = v,
-						None => return None,
-					}
-				},
-				serde_json::Value::Array(a) => {
-					if let Ok(i) = seg.parse::<usize>() {
-						match a.get(i) {
-							Some(v) => t = v,
-							None => return None,
-						}
-					} else {
-						return None
-					}
-				},
-				_ => return None
-			}
-		}
-		match t {
-			serde_json::Value::Bool(b) => {
-				return Some(Value::Bool(*b))
-			},
-			serde_json::Value::Null => {
-				return Some(Value::Null)
-			},
-			serde_json::Value::Number(n) => {
-				if let Some(n) = n.as_f64() {
-					return Some(Value::Float(n))
-				} else {
-					return None
-				}
-			},
-			serde_json::Value::String(s) => {
-				return Some(Value::Str(s.to_owned()))
-			},
-			_ => None
-		}
-	}
-
-
-}
 
 pub struct ResStorage {
     storage: RwLock<HashMap<Vec<u8>, StorageEntry<Resource>>>,

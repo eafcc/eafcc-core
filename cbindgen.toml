@@ -1,0 +1,12 @@
+language = "C"
+no_includes = true
+
+style = "type"
+
+[export]
+prefix = "eafcc_"
+exclude = ["HashMap"]
+
+[parse]
+# parse_deps = true
+include = ["std::sync::RwLock"]

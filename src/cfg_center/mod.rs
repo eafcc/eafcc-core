@@ -11,6 +11,8 @@ use crate::rule_engine::Value;
 use crate::storage_backends;
 use crate::storage_backends::filesystem;
 
+use self::loader::Resource;
+
 // mod config_path_spliter;
 pub struct CFGCenter {
     backend: Box<dyn storage_backends::StorageBackend>,
@@ -31,17 +33,18 @@ impl CFGCenter {
         };
     }
 
-    pub fn get_cfg(&self, ctx: &HashMap<String, Value>, key: &str, prefix: &str) -> Option<Value> {
+    pub fn get_cfg(&self, ctx: &HashMap<String, Value>, key: &str) -> Option<(String, String)> {
         let mut act_rules = Vec::new();
-        self.rule_stor.iter_with_prefix(prefix, |path, rule| {
+
+        self.rule_stor.iter_with_prefix( |path, rule| {
             if rule.spec.rule.eval(ctx) {
                 act_rules.push(path.to_string());
             }
         });
 
         let mut ret = None;
-        let mut neg_filtered_res_id = Vec::new();
-        let mut neg_oids = HashSet::new();
+        let mut neg_filtered_res_id = Vec::with_capacity(act_rules.len());
+        let mut neg_oids = HashSet::with_capacity(act_rules.len());
 
         self.link_stor.batch_get_targets(act_rules, |mut t| {
             t.sort_unstable_by(|&a, &b| {
@@ -76,8 +79,8 @@ impl CFGCenter {
             }
 
             self.res_stor.batch_get_res(&neg_filtered_res_id, |r| {
-                if let Some(v) = r.get(key) {
-                    ret = Some(v);
+                if r.key == key {
+                    ret = Some((r.content_type.clone(), r.data.clone()));
                     return true;
                 }
                 return false;
@@ -85,6 +88,10 @@ impl CFGCenter {
         });
 
         return ret;
+    }
+
+    pub fn full_load_cfg(&self) {
+        self.loader.load_data(&self);
     }
 }
 
@@ -105,9 +112,7 @@ fn test_load_res_and_query() {
 	ctx.insert("bar".to_string(), Value::Str("456".to_string()));
 
 	for _ in 0..1000000 {
-
-	
-		let t = cc.get_cfg(&ctx, "aaa/1/bbb", "/").unwrap();
+		let t = cc.get_cfg(&ctx, "my_key").unwrap();
 	}
 	
 }

@@ -1,2 +1,5 @@
 /target
 Cargo.lock
+*.dylib
+.DS_Store
+flamegraph.svg

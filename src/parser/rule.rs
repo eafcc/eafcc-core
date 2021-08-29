@@ -26,24 +26,10 @@ use crate::rule_engine::{Condition, LeafOperator, Value};
 // ||
 
 fn leaf_binary_op(i: &str) -> IResult<&str, LeafOperator> {
-    let (i, op_str) = alt((
-        tag("=="),
-        tag(">="),
-        tag(">"),
-        tag("<="),
-        tag("<"),
-        tag("!="),
-        tag("in"),
-    ))(i)?;
+    let (i, op_str) = tag("==")(i)?;
 
     let op = match op_str {
         "==" => LeafOperator::Eq,
-        ">=" => LeafOperator::Gte,
-        ">" => LeafOperator::Gt,
-        "<=" => LeafOperator::Lte,
-        "<" => LeafOperator::Lt,
-        "!=" => LeafOperator::Ne,
-        "in" => LeafOperator::InList,
         _ => {
             panic!()
         }
@@ -56,7 +42,6 @@ fn leaf_unary_op(i: &str) -> IResult<&str, LeafOperator> {
     let (i, op_str) = tag("exist")(i)?;
 
     let op = match op_str {
-        "exist" => LeafOperator::Exist,
         _ => {
             panic!()
         }
@@ -83,23 +68,9 @@ where
     delimited(multispace0, inner, multispace0)
 }
 
-fn rhs_literal_list(i: &str) -> IResult<&str, Value> {
-    let (i, v) = delimited(
-        tag("["),
-        separated_list0(tag(","), ws(rhs_literal)),
-        tag("]"),
-    )(i)?;
-
-    return Ok((i, Value::List(v)));
-}
 
 fn rhs_literal(i: &str) -> IResult<&str, Value> {
-    alt((
-        map_res(string, unescape_str),
-        map(recognize_float, parse_int_or_float),
-        map(tag("true"), |_| Value::Bool(true)),
-        map(tag("false"), |_| Value::Bool(false)),
-    ))(i)
+    map_res(string, unescape_str)(i)
 }
 
 fn unescape_str(i: &str) -> Result<Value, String> {
@@ -110,21 +81,12 @@ fn unescape_str(i: &str) -> Result<Value, String> {
     }
 }
 
-fn parse_int_or_float(i: &str) -> Value {
-    if let Ok(t) = i.parse::<i64>() {
-        return Value::Int(t);
-    }
-    if let Ok(t) = i.parse::<f64>() {
-        return Value::Float(t);
-    }
-    return Value::Int(0);
-}
 
 fn leaf_expr(i: &str) -> IResult<&str, Condition> {
     let (i,(ident, op, val)) = tuple((
 		ws(identifier),
 		ws(leaf_binary_op),
-        alt((ws(rhs_literal_list), ws(rhs_literal))),
+        ws(rhs_literal),
 	))(i)?;
 
     let t = Condition::Leaf{
@@ -243,37 +205,21 @@ fn parse_hex(i: &str) -> IResult<&str, &str> {
 
 #[test]
 fn rhs_literal_test() {
-    assert_eq!(rhs_literal("3"), Ok(("", Value::Int(3))));
-    assert_eq!(rhs_literal("3.0"), Ok(("", Value::Float(3.0))));
     assert_eq!(rhs_literal("\"3.0\""), Ok(("", Value::Str("3.0".into()))));
 	assert_eq!(rhs_literal("\"3.0\\n\""), Ok(("", Value::Str("3.0\n".into()))));
-    assert_eq!(rhs_literal("true"), Ok(("", Value::Bool(true))));
-    assert_eq!(rhs_literal("false"), Ok(("", Value::Bool(false))));
-}
-
-#[test]
-fn rhs_literal_list_test() {
-    assert_eq!(
-        rhs_literal_list("[3 , 4,5]"),
-        Ok((
-            "",
-            Value::List(vec![Value::Int(3), Value::Int(4), Value::Int(5)])
-        ))
-    );
 }
 
 #[test]
 fn leaf_expr_test() {
     assert_eq!(
-        leaf_expr("a == 4"),
+        leaf_expr("a == \"4\""),
         Ok((
             "",
             Condition::Leaf{
                 lhs: "a".into(),
                 op: LeafOperator::Eq,
-                rhs: Some(Value::Int(4)),
-            }
-            ,
+                rhs: Some(Value::Str("4".into())),
+            },
         ))
     )
     
@@ -282,14 +228,14 @@ fn leaf_expr_test() {
 #[test]
 fn expr_not_test() {
     assert_eq!(
-        expr_or("!a==1"),
+        expr_or("!a==\"1\""),
         Ok((
             "",
             Condition::Not(Box::new(
                 Condition::Leaf{
                     lhs: "a".into(),
                     op: LeafOperator::Eq,
-                    rhs: Some(Value::Int(1)),
+                    rhs: Some(Value::Str("1".into())),
                 }
             )),
         ))

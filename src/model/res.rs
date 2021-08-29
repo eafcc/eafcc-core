@@ -12,6 +12,7 @@ pub struct ResMeta {
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResSpec {
     pub content_type: String,
+    pub key: String,
 	pub data: String,
 	pub schema: serde_json::Value,
 }

@@ -1,4 +1,4 @@
-use crate::cfg_center::CFGCenter;
+use crate::cfg_center;
 use crate::rule_engine::Value;
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -11,9 +11,13 @@ use std::sync::{RwLock, Arc};
 use crate::storage_backends::{self, filesystem};
 use std::path::PathBuf;
 use libc;
+use std::ffi::c_void;
+
+type CFGCenter = RwLock<cfg_center::CFGCenter>;
+pub struct Context(HashMap<String, Value>);
 
 #[no_mangle]
-fn new_config_center_client(cfg: *const c_char) -> *const RwLock<CFGCenter>{
+pub extern fn new_config_center_client(cfg: *const c_char) -> *const CFGCenter{
 
 	let t = unsafe{
 		assert!(!cfg.is_null());
@@ -35,32 +39,73 @@ fn new_config_center_client(cfg: *const c_char) -> *const RwLock<CFGCenter>{
 		Ok(t) => t,
 	};
 
-    let cc = CFGCenter::new(backend);
+    let cc = cfg_center::CFGCenter::new(backend);
+
+	cc.full_load_cfg();
+
 	let ret = Box::new(RwLock::new(cc));
 	
 	Box::into_raw(ret)
 	
 }
 
+
 #[no_mangle]
-fn get_config(cc: *mut RwLock<CFGCenter>, ctx: *mut HashMap<String, Value>) {
+pub extern fn new_context(val: *const c_char ) -> *const Context {
+	let mut ret = HashMap::new();
+	let val = unsafe{CStr::from_ptr(val).to_string_lossy()};
+	for part in val.split("\n"){
+		if let Some((k,v)) = part.split_once("=") {
+			ret.insert(k.trim().to_owned() , Value::Str(v.trim().to_owned()));
+		}
+	}
+	Box::into_raw(Box::new(Context(ret)))
+}
+
+#[no_mangle]
+pub extern fn free_context(ctx: *mut Context ) {
+	unsafe{Box::from_raw(ctx)};
+}
+
+#[repr(C)]
+pub struct ConfigValue {
+  content_type: *mut c_char,
+  value: *mut c_char,
+}
+
+#[no_mangle]
+pub extern fn get_config(cc: *const CFGCenter, ctx: *const Context, key: *mut c_char) -> *mut ConfigValue{
 
 	let cc = unsafe{
-		Box::from_raw(cc)
+		&*cc
 	};
 
 	let cc = match cc.read() {
-		Err(_) => return,
+		Err(_) => return ptr::null_mut(),
 		Ok(t) => t,
 	};
 
 	let ctx = unsafe{
-		Box::from_raw(ctx)
+		&*ctx
 	};
 
-	
-	cc.get_cfg(&ctx, "aaa/1/bbb", "/").unwrap();
+	let key = unsafe{CStr::from_ptr(key).to_string_lossy()};
 
+	let v = cc.get_cfg(&ctx.0, &key).unwrap();
+
+	Box::into_raw(
+		Box::new(
+			ConfigValue{
+				content_type: CString::new(v.0).unwrap().into_raw(),
+				value: CString::new(v.1).unwrap().into_raw(),
+			}
+		)
+	)
+}
+
+#[no_mangle]
+pub extern fn free_config_value(v: *mut ConfigValue) {
+	unsafe{Box::from_raw(v)};
 }
 
 
