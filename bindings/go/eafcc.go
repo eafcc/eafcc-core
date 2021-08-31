@@ -14,8 +14,10 @@ import (
 // #cgo LDFLAGS: -L${SRCDIR} -leafcc
 // #include <stdlib.h>
 // #include <eafcc.h>
+// void update_cb_c(void *user_data);
+// void update_cb_go(void *user_data);
+// typedef void (*eafcc_update_cb_fn)(void*);
 import "C"
-
 type CFGCenter struct {
 	cc unsafe.Pointer
 }
@@ -24,13 +26,23 @@ type CFGContext struct {
 	ctx unsafe.Pointer
 }
 
+//export update_cb_go
+func update_cb_go(userData unsafe.Pointer) {
+	print("cb in go")
+}
+
 func NewCfgCenter(cfg string) *CFGCenter {
 	ccfg := C.CString(cfg)
 	defer C.free(unsafe.Pointer(ccfg))
 
 	ret := CFGCenter{}
 
-	if handler := C.new_config_center_client(ccfg); handler != nil {
+	pp := uintptr(1000)
+	if handler := C.new_config_center_client(
+		ccfg,
+		(C.eafcc_update_cb_fn)(unsafe.Pointer(C.update_cb_go)),
+		unsafe.Pointer(pp),
+		); handler != nil {
 		ret.cc = unsafe.Pointer(handler)
 		return &ret
 	}
@@ -79,7 +91,7 @@ func main() {
 
 	wg := sync.WaitGroup{}
 	wg.Add(4)
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 2; i++ {
 		go func() {
 			defer wg.Done()
 			for x := 0; x < 1000000; x++ {
@@ -95,5 +107,7 @@ func main() {
 	}
 
 	wg.Wait()
+
+	// time.Sleep(1000)
 
 }

@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use crate::model::object::ObjectID;
 use crate::model::{link, res, rule};
@@ -13,40 +14,51 @@ use crate::storage_backends::filesystem;
 
 use self::loader::Resource;
 
-// mod config_path_spliter;
-pub struct CFGCenter {
-    backend: Box<dyn storage_backends::StorageBackend>,
-    loader: loader::Loader,
+pub struct MemStorage {
     rule_stor: loader::RuleStorage,
     res_stor: loader::ResStorage,
     link_stor: loader::LinkStorage,
 }
+pub struct CFGCenter {
+    backend: Box<dyn storage_backends::StorageBackend>,
+    loader: loader::Loader,
+    mem_store: Arc<RwLock<Box::<MemStorage>>>,
+}
 
 impl CFGCenter {
     pub fn new(backend: Box<dyn storage_backends::StorageBackend>) -> Self {
-        return Self {
-            backend,
-            loader: loader::Loader::new(),
+        let mem_store = Arc::new(RwLock::new(Box::new(MemStorage{
             rule_stor: loader::RuleStorage::new(),
             res_stor: loader::ResStorage::new(),
             link_stor: loader::LinkStorage::new(),
+        })));
+
+        return Self {
+            backend,
+            loader: loader::Loader::new(),
+            mem_store,
         };
     }
 
-    pub fn get_cfg(&self, ctx: &HashMap<String, Value>, key: &str) -> Option<(String, String)> {
+    pub fn get_cfg(&self, ctx: &HashMap<String, Value>, key: &str) -> Result<(String, String), String> {
         let mut act_rules = Vec::new();
 
-        self.rule_stor.iter_with_prefix( |path, rule| {
+        let mut mem_store = self
+        .mem_store
+        .read()
+        .map_err(|e| e.to_string()).unwrap();
+
+        mem_store.rule_stor.iter_with_prefix( |path, rule| {
             if rule.spec.rule.eval(ctx) {
                 act_rules.push(path.to_string());
             }
         });
 
-        let mut ret = None;
+        let mut ret = Err("No Result".into());
         let mut neg_filtered_res_id = Vec::with_capacity(act_rules.len());
         let mut neg_oids = HashSet::with_capacity(act_rules.len());
 
-        self.link_stor.batch_get_targets(act_rules, |mut t| {
+        mem_store.link_stor.batch_get_targets(act_rules, |mut t| {
             t.sort_unstable_by(|&a, &b| {
                 // safety: infinate value is filtered out when loading links from storage
                 if a.pri > b.pri {
@@ -78,9 +90,9 @@ impl CFGCenter {
                 }
             }
 
-            self.res_stor.batch_get_res(&neg_filtered_res_id, |r| {
+            mem_store.res_stor.batch_get_res(&neg_filtered_res_id, |r| {
                 if r.key == key {
-                    ret = Some((r.content_type.clone(), r.data.clone()));
+                    ret = Ok((r.content_type.clone(), r.data.clone()));
                     return true;
                 }
                 return false;
@@ -93,6 +105,9 @@ impl CFGCenter {
     pub fn full_load_cfg(&self) {
         self.loader.load_data(&self);
     }
+
+
+    
 }
 
 #[test]

@@ -1,5 +1,5 @@
 pub mod filesystem;
-use std::io::Result;
+use std::{io::Result, sync::Arc};
 
 use crate::model::object::{ObjectID, ObjectIDRef};
 
@@ -25,5 +25,5 @@ pub trait StorageBackend {
 	fn get_obj_by_hash(&self, hash: ObjectIDRef) -> Result<Vec<u8>>;
 	fn list_dir(&self, version: &str, path: &str) -> Result<Vec<DirItem>>;
 	fn get_hash_by_path(&self, version: &str, path: &str) -> Result<ObjectID>;
-	fn set_update_cb(&mut self, cb: fn(Vec<StorageChangeEvent>));
+	fn set_update_cb(&self, cb: Box<dyn Fn(Vec<StorageChangeEvent>) + Send + Sync + 'static>);
 }

@@ -11,91 +11,103 @@ use serde_json::{self, json};
 
 use crate::cfg_center::CFGCenter;
 use crate::model::RootCommon;
+use std::cell::RefCell;
+use std::collections::btree_map::Range;
 use std::collections::{BTreeMap, HashMap};
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::RwLock;
-use std::collections::btree_map::Range;
 
-pub struct Loader {
+pub struct Loader {}
 
-}
-
-impl Loader{
+impl Loader {
     pub fn new() -> Self {
-        return Self {
-        };
+        return Self {};
     }
 
-    pub fn load_by_link(link_id: &str, link_data: &[u8], cc: &CFGCenter) -> Result<(), DataLoaderError> {
+    pub fn load_by_link(
+        link_id: &str,
+        link_data: &[u8],
+        cc: &CFGCenter,
+    ) -> Result<(), DataLoaderError> {
         let root = serde_json::from_slice::<RootCommon>(link_data)?;
         let meta = serde_json::from_value::<LinkMeta>(root.meta)?;
         let spec = serde_json::from_value::<LinkSpec>(root.spec)?;
 
-		if !spec.pri.is_finite() {
-			return Err(DataLoaderError::SpecParseError("pri field is not a valid float number".to_string()))
-		}
+        if !spec.pri.is_finite() {
+            return Err(DataLoaderError::SpecParseError(
+                "pri field is not a valid float number".to_string(),
+            ));
+        }
 
         let mut target = LinkTarget {
             pri: spec.pri,
             is_neg: spec.is_neg,
             target: Vec::new(),
-			link_id:link_id.to_string(),
+            link_id: link_id.to_string(),
         };
+
+        let mut mem_store = cc.mem_store.write().map_err(|e| e.to_string()).unwrap();
 
         // load all res that this rule depends on
         for res in spec.reses.iter() {
-			if res.starts_with("path:/")  && res.len() > 6 {
-				let res = &res[5..];
-				let oid = cc
-					.backend
-					.get_hash_by_path("master", &("/reses".to_string() + &res))
-					.map_err(|_| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
+            if res.starts_with("path:/") && res.len() > 6 {
+                let res = &res[5..];
+                let oid = cc
+                    .backend
+                    .get_hash_by_path("master", &("/reses".to_string() + &res))
+                    .map_err(|_| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
 
+                // the following function call will increase the reference counter
 
-				// the following function call will increase the reference counter
-				cc.res_stor
-					.load_or_ref_res(&oid, |key| {
-						let res_raw_data = cc.backend.get_obj_by_hash(key).unwrap();
-						let root = serde_json::from_slice::<RootCommon>(&res_raw_data).unwrap();
-						let meta = serde_json::from_value::<ResMeta>(root.meta).unwrap();
-						let spec = serde_json::from_value::<ResSpec>(root.spec).unwrap();
-						return Resource {
+                mem_store
+                    .res_stor
+                    .load_or_ref_res(&oid, |key| {
+                        let res_raw_data = cc.backend.get_obj_by_hash(key).unwrap();
+                        let root = serde_json::from_slice::<RootCommon>(&res_raw_data).unwrap();
+                        let meta = serde_json::from_value::<ResMeta>(root.meta).unwrap();
+                        let spec = serde_json::from_value::<ResSpec>(root.spec).unwrap();
+                        return Resource {
                             content_type: spec.content_type,
                             key: spec.key,
-							data: spec.data,
-						};
-					})
-					.map_err(|_| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
+                            data: spec.data,
+                        };
+                    })
+                    .map_err(|_| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
 
-				target.target.push(oid);
-			} else {
-				return Err(DataLoaderError::ObjectNotFoundError("only support find object by path".to_string()))
-			}
+                target.target.push(oid);
+            } else {
+                return Err(DataLoaderError::ObjectNotFoundError(
+                    "only support find object by path".to_string(),
+                ));
+            }
         }
 
-		
         // the following function call will increase the reference counter
-		if spec.rule.starts_with("path:/") && spec.rule.len() > 6 {
-			let rule = &spec.rule[5..];
-			cc.rule_stor
-				.load_or_ref_rule(rule, |key| {
-					let oid = cc
-						.backend
-						.get_hash_by_path("master", &("/rules".to_string() + key))
-						.map_err(|_| DataLoaderError::ObjectNotFoundError(key.to_owned())).unwrap();
+        if spec.rule.starts_with("path:/") && spec.rule.len() > 6 {
+            let rule = &spec.rule[5..];
+            mem_store
+                .rule_stor
+                .load_or_ref_rule(rule, |key| {
+                    let oid = cc
+                        .backend
+                        .get_hash_by_path("master", &("/rules".to_string() + key))
+                        .map_err(|_| DataLoaderError::ObjectNotFoundError(key.to_owned()))
+                        .unwrap();
 
-					let res_raw_data = cc.backend.get_obj_by_hash(&oid).unwrap();
+                    let res_raw_data = cc.backend.get_obj_by_hash(&oid).unwrap();
 
-					return load_rule(&res_raw_data).unwrap()
-				})
-				.map_err(|_| DataLoaderError::ObjectNotFoundError((rule).to_owned()))?;
+                    return load_rule(&res_raw_data).unwrap();
+                })
+                .map_err(|_| DataLoaderError::ObjectNotFoundError((rule).to_owned()))?;
 
-			cc.link_stor.add_rule(rule.to_string(), target);
-		} else {
-			return Err(DataLoaderError::ObjectNotFoundError("only support find object by path".to_string()))
-		}
-		
+            mem_store.link_stor.add_rule(rule.to_string(), target);
+        } else {
+            return Err(DataLoaderError::ObjectNotFoundError(
+                "only support find object by path".to_string(),
+            ));
+        }
+
         return Ok(());
     }
 
@@ -123,12 +135,12 @@ struct StorageEntry<T> {
 }
 
 pub struct RuleStorage {
-    storage: RwLock<BTreeMap<String, StorageEntry<Rule>>>,
+    storage: RefCell<BTreeMap<String, StorageEntry<Rule>>>,
 }
 
 impl RuleStorage {
     pub fn new() -> Self {
-        let storage = RwLock::new(BTreeMap::new());
+        let storage = RefCell::new(BTreeMap::new());
         return Self { storage };
     }
 
@@ -137,12 +149,8 @@ impl RuleStorage {
         path: &str,
         loader: F,
     ) -> Result<(), DataMemStorageError> {
-        let mut storage = self
-            .storage
-            .write()
-            .map_err(|e| DataMemStorageError::CustomError(e.to_string()))?;
-        let e = storage
-            .entry(path.to_string())
+        let mut storage = self.storage.borrow_mut();
+        let e = storage.entry(path.to_string())
             .or_insert_with(|| StorageEntry {
                 counter: 0,
                 data: loader(path),
@@ -153,35 +161,26 @@ impl RuleStorage {
     }
 
     pub fn release_rule(&self, path: &str) -> Result<(), DataMemStorageError> {
-        let mut storage = self
-            .storage
-            .write()
-            .map_err(|e| DataMemStorageError::CustomError(e.to_string()))?;
-        if let Some(e) = storage.get_mut(path) {
+        if let Some(e) = self.storage.borrow_mut().get_mut(path) {
             if e.counter == 1 {
-                storage.remove(path);
+                self.storage.borrow_mut().remove(path);
             }
         }
         Ok(())
     }
 
-	pub fn iter_with_prefix<F:FnMut(&String, &Rule)>(&self, mut cb: F)  {
-		let mut storage = self
-            .storage
-            .read()
-            .map_err(|e| DataMemStorageError::CustomError(e.to_string())).unwrap();
-		for (k,v) in storage.iter() {
-			cb(k,&v.data)
-		}
-	}
+    pub fn iter_with_prefix<F: FnMut(&String, &Rule)>(&self, mut cb: F) {
+        for (k, v) in self.storage.borrow().iter() {
+            cb(k, &v.data)
+        }
+    }
 }
 
 pub struct Resource {
     pub content_type: String,
     pub key: String,
-	pub data: String,
+    pub data: String,
 }
-
 
 pub struct ResStorage {
     storage: RwLock<HashMap<Vec<u8>, StorageEntry<Resource>>>,
@@ -224,22 +223,22 @@ impl ResStorage {
         Ok(())
     }
 
-	pub fn batch_get_res<F: FnMut(&Resource) -> bool>(&self, s: &Vec<ObjectID>, mut cb: F) {
-		// let mut ret = Vec::new();
+    pub fn batch_get_res<F: FnMut(&Resource) -> bool>(&self, s: &Vec<ObjectID>, mut cb: F) {
+        // let mut ret = Vec::new();
 
-		let storage = self
-		.storage
-		.read()
-		.map_err(|e| DataMemStorageError::CustomError(e.to_string())).unwrap();
+        let storage = self
+            .storage
+            .read()
+            .map_err(|e| DataMemStorageError::CustomError(e.to_string()))
+            .unwrap();
 
-		for oid in s {
-			let val =  storage.get(oid).unwrap();
-			if cb(&val.data) {
-				break;
-			}
-		}
-		
-	}
+        for oid in s {
+            let val = storage.get(oid).unwrap();
+            if cb(&val.data) {
+                break;
+            }
+        }
+    }
 }
 
 pub struct LinkStorage {
@@ -263,21 +262,20 @@ impl LinkStorage {
         return Ok(());
     }
 
-	pub fn batch_get_targets<F: FnMut(Vec<&LinkTarget>)>(&self, s: Vec<String>, mut cb: F) {
-		let mut ret = Vec::new();
+    pub fn batch_get_targets<F: FnMut(Vec<&LinkTarget>)>(&self, s: Vec<String>, mut cb: F) {
+        let mut ret = Vec::new();
 
-		let storage = self
-		.idx_rule_to_res
-		.read()
-		.map_err(|e| DataMemStorageError::CustomError(e.to_string())).unwrap();
+        let storage = self
+            .idx_rule_to_res
+            .read()
+            .map_err(|e| DataMemStorageError::CustomError(e.to_string()))
+            .unwrap();
 
-		for rule_name in s {
-			for target in storage.get(&rule_name).unwrap() {
-				ret.push(target);
-			}
-		}
-		cb(ret);
-	}
+        for rule_name in s {
+            for target in storage.get(&rule_name).unwrap() {
+                ret.push(target);
+            }
+        }
+        cb(ret);
+    }
 }
-
-
