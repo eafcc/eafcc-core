@@ -1,5 +1,5 @@
 pub mod filesystem;
-use std::{io::Result, sync::Arc};
+use std::io::Result;
 
 use crate::model::object::{ObjectID, ObjectIDRef};
 

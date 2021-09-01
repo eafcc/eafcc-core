@@ -1,22 +1,16 @@
 use crate::model::link::{LinkMeta, LinkSpec, LinkTarget};
 use crate::model::res::{ResMeta, ResSpec};
-use crate::model::rule::{self, load_rule};
+use crate::model::rule::load_rule;
 use crate::storage_backends;
 
 use crate::error::{DataLoaderError, DataMemStorageError};
 use crate::model::object::{ObjectID, ObjectIDRef};
-use crate::rule_engine::{Rule, RuleMeta, RuleSpec, Value};
-use serde::{Deserialize, Serialize};
-use serde_json::{self, json};
+use crate::rule_engine::Rule;
+use serde_json;
 
-use crate::cfg_center::CFGCenter;
 use crate::model::RootCommon;
-use std::cell::{Cell, RefCell};
-use std::collections::btree_map::Range;
+
 use std::collections::{BTreeMap, HashMap};
-use std::marker::PhantomData;
-use std::rc::Rc;
-use std::sync::RwLock;
 
 use super::{CFGCenterInner, MemStorage};
 
@@ -34,10 +28,8 @@ impl Loader {
         mem_store: &mut MemStorage,
     ) -> Result<(), DataLoaderError> {
         let root = serde_json::from_slice::<RootCommon>(link_data)?;
-        let meta = serde_json::from_value::<LinkMeta>(root.meta)?;
+        let _meta = serde_json::from_value::<LinkMeta>(root.meta)?;
         let spec = serde_json::from_value::<LinkSpec>(root.spec)?;
-
-
 
         if !spec.pri.is_finite() {
             return Err(DataLoaderError::SpecParseError(
@@ -67,13 +59,19 @@ impl Loader {
                     .load_or_ref_res(&oid, |key| {
                         let res_raw_data = backend.get_obj_by_hash(key).unwrap();
                         let root = serde_json::from_slice::<RootCommon>(&res_raw_data).unwrap();
-                        let meta = serde_json::from_value::<ResMeta>(root.meta).unwrap();
+                        let _meta = serde_json::from_value::<ResMeta>(root.meta).unwrap();
                         let spec = serde_json::from_value::<ResSpec>(root.spec).unwrap();
-                        return Resource {
-                            content_type: spec.content_type,
-                            key: spec.key,
-                            data: spec.data,
-                        };
+
+                        let ret: Vec<_> = spec
+                            .0
+                            .into_iter()
+                            .map(|e| Resource {
+                                content_type: e.content_type,
+                                key: e.key,
+                                data: e.data,
+                            })
+                            .collect();
+                        return ret;
                     })
                     .map_err(|_| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
 
@@ -102,7 +100,10 @@ impl Loader {
                 })
                 .map_err(|_| DataLoaderError::ObjectNotFoundError((rule).to_owned()))?;
 
-            mem_store.link_stor.add_rule(rule.to_string(), target);
+            mem_store
+                .link_stor
+                .add_rule(rule.to_string(), target)
+                .unwrap();
         } else {
             return Err(DataLoaderError::ObjectNotFoundError(
                 "only support find object by path".to_string(),
@@ -115,7 +116,7 @@ impl Loader {
     pub fn load_data(&self, cc: &CFGCenterInner) -> Result<Box<MemStorage>, String> {
         let backend = cc.backend.lock().unwrap();
         if backend.is_none() {
-            return Err("backend not set".into())
+            return Err("backend not set".into());
         }
         let backend = backend.as_ref().unwrap();
 
@@ -135,17 +136,22 @@ impl Loader {
                     continue;
                 }
                 let rule_raw_data = backend.get_obj_by_hash(&cur_node.hash).unwrap();
-                Self::load_by_link(&cur_node.name, &rule_raw_data, backend.as_ref(), mem_store.as_mut()).unwrap();
+                Self::load_by_link(
+                    &cur_node.name,
+                    &rule_raw_data,
+                    backend.as_ref(),
+                    mem_store.as_mut(),
+                )
+                .unwrap();
             }
         }
 
-        return Ok(mem_store)
+        return Ok(mem_store);
     }
 }
 
 #[derive(Debug)]
 struct StorageEntry<T> {
-    counter: usize,
     data: T,
 }
 
@@ -164,24 +170,10 @@ impl RuleStorage {
         path: &str,
         loader: F,
     ) -> Result<(), DataMemStorageError> {
-        let e = self
-            .storage
+        self.storage
             .entry(path.to_string())
-            .or_insert_with(|| StorageEntry {
-                counter: 0,
-                data: loader(path),
-            });
-        e.counter += 1;
+            .or_insert_with(|| StorageEntry { data: loader(path) });
         return Ok(());
-    }
-
-    pub fn release_rule(&mut self, path: &str) -> Result<(), DataMemStorageError> {
-        if let Some(e) = self.storage.get_mut(path) {
-            if e.counter == 1 {
-                self.storage.remove(path);
-            }
-        }
-        Ok(())
     }
 
     pub fn iter_with_prefix<F: FnMut(&String, &Rule)>(&self, mut cb: F) {
@@ -199,7 +191,7 @@ pub struct Resource {
 }
 
 pub struct ResStorage {
-    storage: HashMap<Vec<u8>, StorageEntry<Resource>>,
+    storage: HashMap<Vec<u8>, StorageEntry<Vec<Resource>>>,
 }
 
 impl ResStorage {
@@ -215,30 +207,16 @@ impl ResStorage {
         loader: F,
     ) -> Result<(), DataMemStorageError>
     where
-        F: Fn(ObjectIDRef) -> Resource,
+        F: Fn(ObjectIDRef) -> Vec<Resource>,
     {
-        let e = self
-            .storage
+        self.storage
             .entry(key.to_vec())
-            .or_insert_with(|| StorageEntry {
-                counter: 0,
-                data: loader(key),
-            });
-        e.counter += 1;
+            .or_insert_with(|| StorageEntry { data: loader(key) });
 
         return Ok(());
     }
 
-    pub fn release_res(&mut self, key: ObjectIDRef) -> Result<(), DataMemStorageError> {
-        if let Some(e) = self.storage.get_mut(key) {
-            if e.counter == 1 {
-                self.storage.remove(key);
-            }
-        }
-        Ok(())
-    }
-
-    pub fn batch_get_res<F: FnMut(&Resource) -> bool>(&self, s: &Vec<ObjectID>, mut cb: F) {
+    pub fn batch_get_res<F: FnMut(&Vec<Resource>) -> bool>(&self, s: &Vec<ObjectID>, mut cb: F) {
         for oid in s {
             let val = self.storage.get(oid).unwrap();
             if cb(&val.data) {

@@ -1,17 +1,16 @@
 use crate::cfg_center;
 use crate::rule_engine::Value;
 use crate::storage_backends::{self, filesystem};
-use libc;
 use serde_json;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ffi::{CStr, CString};
-use std::ops::Deref;
 use std::os::raw::c_char;
 use std::path::PathBuf;
 use std::ptr;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::slice;
+use std::mem::ManuallyDrop;
 
 type CFGCenter = cfg_center::CFGCenter;
 pub struct Context(HashMap<String, Value>);
@@ -89,26 +88,46 @@ pub struct ConfigValue {
 pub extern "C" fn get_config(
     cc: *const CFGCenter,
     ctx: *const Context,
-    key: *mut c_char,
+    keys: *mut *mut c_char,
+	key_cnt: usize,
 ) -> *mut ConfigValue {
     let cc = unsafe { &*cc };
 
     let ctx = unsafe { &*ctx };
 
-    let key = unsafe { CStr::from_ptr(key).to_string_lossy() };
+    let key = unsafe {
+		let mut ret = Vec::with_capacity(key_cnt);
+		for key in slice::from_raw_parts(keys, key_cnt) {
+			if let Ok(t) = CStr::from_ptr(*key).to_str() {
+				ret.push(t);
+			} else {
+				return ptr::null_mut();
+			}
+		}
+		ret
+	};
 
     let cc_ref = cc.clone();
-    let v = cc_ref.get_cfg(&ctx.0, &key).unwrap();
+    let vs = cc_ref.get_cfg(&ctx.0, &key).unwrap();
 
-    Box::into_raw(Box::new(ConfigValue {
-        content_type: CString::new(v.0).unwrap().into_raw(),
-        value: CString::new(v.1).unwrap().into_raw(),
-    }))
+	let mut ret = Vec::with_capacity(key_cnt);
+	for v in vs {
+		ret.push(ConfigValue {
+			content_type: CString::new(v.0).unwrap().into_raw(),
+			value: CString::new(v.1).unwrap().into_raw(),
+		});
+	}
+	
+	ret.shrink_to_fit();
+	let mut ret = ManuallyDrop::new(ret);
+	let t = ret.as_mut_ptr();
+	println!("==={:#?}", t);
+	return t
 }
 
 #[no_mangle]
-pub extern "C" fn free_config_value(v: *mut ConfigValue) {
-    unsafe { Box::from_raw(v) };
+pub extern "C" fn free_config_value(v: *mut ConfigValue, n: usize) {
+    unsafe { Vec::from_raw_parts(v, n, n)};
 }
 
 fn build_storage_backend_from_cfg(

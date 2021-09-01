@@ -1,14 +1,10 @@
 
 
 use nom::branch::alt;
-use nom::bytes::complete::{escaped, escaped_transform, tag, take_till1, take_while_m_n};
-use nom::character::complete::{alpha1, alphanumeric1, char, digit1, multispace0, space0};
+use nom::bytes::complete::{escaped, tag, take_till1, take_while_m_n};
+use nom::character::complete::{alpha1, alphanumeric1, multispace0};
 use nom::combinator::{map, map_res, peek, recognize};
-use nom::error::{context, ParseError};
-use nom::multi::{many0, separated_list0};
-use nom::number::complete::{double, recognize_float};
-use nom::sequence::{delimited, pair, preceded, tuple};
-use nom::IResult;
+use nom::{IResult, error::{context, ParseError}, multi::many0, sequence::{delimited, pair, preceded, tuple}};
 
 use unescape::unescape;
 
@@ -38,17 +34,6 @@ fn leaf_binary_op(i: &str) -> IResult<&str, LeafOperator> {
     return Ok((i, op));
 }
 
-fn leaf_unary_op(i: &str) -> IResult<&str, LeafOperator> {
-    let (i, op_str) = tag("exist")(i)?;
-
-    let op = match op_str {
-        _ => {
-            panic!()
-        }
-    };
-
-    return Ok((i, op));
-}
 
 pub fn identifier(input: &str) -> IResult<&str, &str> {
     recognize(pair(

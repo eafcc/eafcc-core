@@ -6,8 +6,8 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"runtime"
 	"sync"
-	"time"
 	"unsafe"
 )
 
@@ -45,34 +45,59 @@ func NewCfgCenter(cfg string) *CFGCenter {
 		unsafe.Pointer(pp),
 		); handler != nil {
 		ret.cc = unsafe.Pointer(handler)
+
 		return &ret
 	}
 	return nil
 }
 
-func (c *CFGCenter) GetCfg(ctx *CFGContext, key string) (string, string) {
-	ckey := C.CString(key)
-	defer C.free(unsafe.Pointer(ckey))
+func (c *CFGCenter) GetCfg(ctx *CFGContext, keys []string) [][2]string {
+	if len(keys) == 0 {
+		return nil
+	}
 
-	t := C.get_config((*C.eafcc_CFGCenter)(c.cc), (*C.eafcc_Context)(ctx.ctx), ckey)
-	contextType := C.GoString(t.content_type)
-	value := C.GoString(t.value)
-	C.free_config_value((*C.eafcc_ConfigValue)(t))
-	return contextType, value
+	ckeys := make([]unsafe.Pointer, 0, len(keys))
+	for _, key := range keys {
+		ckey := C.CString(key)
+		ckeys = append(ckeys, unsafe.Pointer(ckey))
+		defer C.free(unsafe.Pointer(ckey))
+	}
+	
+	t := C.get_config((*C.eafcc_CFGCenter)(c.cc), (*C.eafcc_Context)(ctx.ctx), (**C.char)(unsafe.Pointer(&ckeys[0])), C.ulong(len(keys)))
+	
+
+	ret := make([][2]string, 0, len(keys))
+
+	for i:=0; i<len(keys); i++ {
+		tmpP := unsafe.Pointer(uintptr(unsafe.Pointer(t)) + uintptr(i) * unsafe.Sizeof(C.eafcc_ConfigValue{}))
+		t := (*C.eafcc_ConfigValue)(tmpP)
+		contextType := C.GoString(t.content_type)
+		value := C.GoString(t.value)
+		ret = append(ret, [2]string{contextType, value})
+	}
+	C.free_config_value(t, C.ulong(len(keys)))
+	return ret
 }
 
 func NewContext(ctx string) *CFGContext {
 	cctx := C.CString(ctx)
 	defer C.free(unsafe.Pointer(cctx))
 
-	ret := CFGContext{}
+	ret := &CFGContext{}
 
 	if handler := C.new_context(cctx); handler != nil {
 		ret.ctx = unsafe.Pointer(handler)
-		return &ret
+
+		runtime.SetFinalizer(ret, func(w *CFGContext) {
+			C.free_context((*C.eafcc_Context)(w.ctx))
+		})
+
+		return ret
 	}
 	return nil
 }
+
+
 
 func main() {
 	go func() {
@@ -88,14 +113,21 @@ func main() {
 		}
 	}`)
 	
-	ctx := NewContext("foo=123\nbar=456")
+	
 	wg := sync.WaitGroup{}
-	wg.Add(4)
-	for i := 0; i < 4; i++ {
+	wg.Add(1)
+	for i := 0; i < 1; i++ {
 		go func() {
 			defer wg.Done()
-			for x := 0; x < 1000; x++ {
-				contextType, value := cc.GetCfg(ctx, "my_key")
+			ctx := NewContext("foo=123\nbar=456")
+			for x := 0; x < 1; x++ {
+				if x % 10000 == 0 {
+					runtime.GC()
+				}
+				
+				values := cc.GetCfg(ctx, []string{"my_key", "my_key", "my_key", "my_key"})
+				
+				contextType, value := values[0][0], values[0][1]
 				if contextType != "application/json" {
 					panic(contextType)
 				}
@@ -108,6 +140,6 @@ func main() {
 
 	wg.Wait()
 
-	time.Sleep(1000*time.Hour)
+	// time.Sleep(1000*time.Hour)
 
 }

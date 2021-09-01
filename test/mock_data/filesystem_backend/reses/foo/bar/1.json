@@ -5,10 +5,12 @@
 		"desc": "balabalabala",
 		"tags": ["foo", "bar"]
 	},
-	"spec": {
-		"content_type": "application/json", 
-		"key":"my_key",
-		"data": "{\"aaa\":[{},{\"bbb\":\"hahaha\"}]}",
-		"schema": {}
-	}
+	"spec": [
+		{
+			"content_type": "application/json", 
+			"key":"my_key",
+			"data": "{\"aaa\":[{},{\"bbb\":\"hahaha\"}]}",
+			"schema": {}
+		}
+	]
 }

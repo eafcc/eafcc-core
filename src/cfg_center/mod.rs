@@ -1,21 +1,12 @@
 mod loader;
 
-use std::cell::Cell;
+
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::marker::PhantomData;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
-use std::thread;
 
-use crate::model::object::ObjectID;
-use crate::model::{link, res, rule};
-use crate::rule_engine::Value;
-use crate::storage_backends::{self, StorageBackend};
-use crate::storage_backends::filesystem;
+use crate::{rule_engine::Value, storage_backends};
 
-use self::loader::Resource;
-use std::time;
 
 pub struct MemStorage {
     rule_stor: loader::RuleStorage,
@@ -50,10 +41,10 @@ impl CFGCenter {
         self.0.backend.lock().unwrap().replace(backend);
     }
 
-    pub fn get_cfg(&self, ctx: &HashMap<String, Value>, key: &str) -> Result<(String, String), String> {
+    pub fn get_cfg(&self, ctx: &HashMap<String, Value>, keys: &Vec<&str>) -> Result<Vec<(String, String)>, String> {
         let mut act_rules = Vec::new();
 
-        let mut mem_store = self.0
+        let mem_store = self.0
         .mem_store
         .read()
         .map_err(|e| e.to_string()).unwrap();
@@ -68,6 +59,7 @@ impl CFGCenter {
         let mut neg_filtered_res_id = Vec::with_capacity(act_rules.len());
         let mut neg_oids = HashSet::with_capacity(act_rules.len());
 
+        let mut ret_buf = Vec::with_capacity(keys.len());
         mem_store.link_stor.batch_get_targets(act_rules, |mut t| {
             t.sort_unstable_by(|&a, &b| {
                 // safety: infinate value is filtered out when loading links from storage
@@ -100,15 +92,21 @@ impl CFGCenter {
                 }
             }
 
-            mem_store.res_stor.batch_get_res(&neg_filtered_res_id, |r| {
-                if r.key == key {
-                    ret = Ok((r.content_type.clone(), r.data.clone()));
-                    return true;
-                }
-                return false;
-            })
+            for key in keys {
+                mem_store.res_stor.batch_get_res(&neg_filtered_res_id, |rs| {
+                    for r in rs {
+                        if r.key == *key {
+                            ret_buf.push((r.content_type.clone(), r.data.clone()));
+                            return true;
+                        }
+                    }
+                    ret_buf.push(("".to_string(), "".to_string()));
+                    return false;
+                })
+            }
         });
 
+        ret = Ok(ret_buf);
         return ret;
     }
 
@@ -150,8 +148,9 @@ fn test_load_res_and_query() {
         ctx.insert("foo".to_string(), Value::Str("123".to_string()));
         ctx.insert("bar".to_string(), Value::Str("456".to_string()));
 
-        for i in 0..1000000000 {
-            let t = cc1.get_cfg(&ctx, "my_key").unwrap();
+        let my_key = vec!["my_key","my_key","my_key"];
+        for i in 0..10000000 {
+            let t = cc1.get_cfg(&ctx, &my_key).unwrap();
         }
     });
 	
@@ -159,9 +158,10 @@ fn test_load_res_and_query() {
         let mut ctx = HashMap::new();
         ctx.insert("foo".to_string(), Value::Str("123".to_string()));
         ctx.insert("bar".to_string(), Value::Str("456".to_string()));
-    
-        for _ in 0..1000000000 {
-            let t = cc2.get_cfg(&ctx, "my_key").unwrap();
+        
+        let my_key = vec!["my_key","my_key","my_key"];
+        for _ in 0..10000000 {
+            let t = cc2.get_cfg(&ctx, &my_key).unwrap();
         }
     });
 

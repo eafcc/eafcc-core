@@ -1,13 +1,10 @@
 use super::RootCommon;
-use crate::error::{DataLoaderError, DataMemStorageError};
+use crate::error::DataLoaderError;
 use crate::parser::rule;
-use crate::rule_engine::{Condition, LeafOperator, Value};
-use crate::rule_engine::{Rule, RuleMeta, RuleSpec};
+
+use crate::rule_engine::{LeafOperator, Rule, RuleMeta, RuleSpec, Value};
+
 use serde_json;
-use std::collections::BTreeMap;
-use std::io::Seek;
-use std::rc::Rc;
-use std::sync::RwLock;
 
 pub fn load_rule(rule_data: &[u8]) -> Result<Rule, DataLoaderError> {
     let root = serde_json::from_slice::<RootCommon>(rule_data)?;
@@ -31,9 +28,6 @@ pub fn load_rule(rule_data: &[u8]) -> Result<Rule, DataLoaderError> {
         "no rule found or rule is not string".into(),
     ));
 }
-
-
-
 
 #[test]
 fn test_load_rule() {
@@ -82,9 +76,7 @@ fn test_load_rule() {
                         Condition::Not(Box::new(Condition::Leaf {
                             lhs: "str".into(),
                             op: LeafOperator::Eq,
-                            rhs: Some(
-                                Value::Str("123".into(),),
-                            ),
+                            rhs: Some(Value::Str("123".into(),),),
                         }),),
                     ],),
                 ],),

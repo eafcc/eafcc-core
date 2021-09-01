@@ -1,9 +1,8 @@
-#![feature(shared_from_slice)]
 use crate::model::object::{ObjectID, ObjectIDRef};
-use std::{cell::{Cell, RefCell}, collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, mpsc::channel}};
+use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, mpsc::channel}};
 
 use super::{DirItem, StorageBackend, StorageChangeEvent};
-use notify::{watcher, RecommendedWatcher, RecursiveMode, Watcher, DebouncedEvent};
+use notify::{watcher, RecursiveMode, Watcher, DebouncedEvent};
 use std::io::Result;
 use std::str;
 use std::thread;
