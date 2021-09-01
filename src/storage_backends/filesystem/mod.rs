@@ -3,7 +3,7 @@ use crate::model::object::{ObjectID, ObjectIDRef};
 use std::{cell::{Cell, RefCell}, collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, mpsc::channel}};
 
 use super::{DirItem, StorageBackend, StorageChangeEvent};
-use notify::{watcher, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{watcher, RecommendedWatcher, RecursiveMode, Watcher, DebouncedEvent};
 use std::io::Result;
 use std::str;
 use std::thread;
@@ -22,7 +22,7 @@ This backend is for develop and testing, Never use this backend in production, b
 pub struct FilesystemBackend {
     hash_2_path: HashMap<ObjectID, PathBuf>,
     base_path: PathBuf,
-    cb: RefCell<Option<Arc<dyn Fn(Vec<StorageChangeEvent>) + Send + Sync >>>,
+    cb: Option<Arc<dyn Fn(Vec<StorageChangeEvent>) + Send + Sync >>,
 }
 
 impl FilesystemBackend {
@@ -30,7 +30,7 @@ impl FilesystemBackend {
         let ret = Self {
             hash_2_path: HashMap::new(),
             base_path,
-            cb: RefCell::new(None),
+            cb: None,
         };
         return ret;
     }
@@ -98,12 +98,12 @@ impl StorageBackend for FilesystemBackend {
         ));
     }
 
-    fn set_update_cb(&self, cb: Box<dyn Fn(Vec<StorageChangeEvent>) + Send + Sync>) {
-        if self.cb.borrow().is_none() {
+    fn set_update_cb(&mut self, cb: Box<dyn Fn(Vec<StorageChangeEvent>) + Send + Sync>) {
+        if self.cb.is_none() {
             let t:Arc<dyn Fn(Vec<StorageChangeEvent>) + Send + Sync> = Arc::from(cb);
-            self.cb.replace(Some(t));
+            self.cb = Some(t);
             let path = self.base_path.to_string_lossy().to_string();
-            let cb = self.cb.borrow().clone().unwrap();
+            let cb = self.cb.clone().unwrap();
             thread::spawn(move || {
                 eafcc_watcher(
                     path,
@@ -121,7 +121,7 @@ fn eafcc_watcher(path: String, cb: Arc<dyn Fn(Vec<StorageChangeEvent>)>) {
 
     // Create a watcher object, delivering debounced events.
     // The notification back-end is selected based on the platform.
-    let mut watcher = watcher(tx, Duration::from_secs(10)).unwrap();
+    let mut watcher = watcher(tx, Duration::from_secs(2)).unwrap();
 
     // Add a path to be watched. All files and directories at that path and
     // below will be monitored for changes.
@@ -130,7 +130,11 @@ fn eafcc_watcher(path: String, cb: Arc<dyn Fn(Vec<StorageChangeEvent>)>) {
     loop {
         match rx.recv() {
             Ok(event) => {
-                cb(Vec::new());
+                match event {
+                    DebouncedEvent::Chmod(_) | DebouncedEvent::Create(_) | DebouncedEvent::Remove(_) | DebouncedEvent::Rename(_,_) | DebouncedEvent::Rescan | DebouncedEvent::Write(_) => cb(Vec::new()),
+                    _ => continue,
+                }
+                
             }
             Err(e) => println!("watch error: {:?}", e),
         }

@@ -7,6 +7,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -86,15 +87,14 @@ func main() {
 			"path": "../../test/mock_data/filesystem_backend/"
 		}
 	}`)
-
+	
 	ctx := NewContext("foo=123\nbar=456")
-
 	wg := sync.WaitGroup{}
 	wg.Add(4)
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 4; i++ {
 		go func() {
 			defer wg.Done()
-			for x := 0; x < 1000000; x++ {
+			for x := 0; x < 1000; x++ {
 				contextType, value := cc.GetCfg(ctx, "my_key")
 				if contextType != "application/json" {
 					panic(contextType)
@@ -108,6 +108,6 @@ func main() {
 
 	wg.Wait()
 
-	// time.Sleep(1000)
+	time.Sleep(1000*time.Hour)
 
 }

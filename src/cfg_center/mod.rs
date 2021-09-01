@@ -1,49 +1,59 @@
 mod loader;
 
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
 
 use crate::model::object::ObjectID;
 use crate::model::{link, res, rule};
 use crate::rule_engine::Value;
-use crate::storage_backends;
+use crate::storage_backends::{self, StorageBackend};
 use crate::storage_backends::filesystem;
 
 use self::loader::Resource;
+use std::time;
 
 pub struct MemStorage {
     rule_stor: loader::RuleStorage,
     res_stor: loader::ResStorage,
     link_stor: loader::LinkStorage,
 }
-pub struct CFGCenter {
-    backend: Box<dyn storage_backends::StorageBackend>,
+pub struct CFGCenterInner {
+    backend: Mutex<Option<Box<dyn storage_backends::StorageBackend + Send + Sync>>>,
     loader: loader::Loader,
-    mem_store: Arc<RwLock<Box::<MemStorage>>>,
+    mem_store: RwLock<Box::<MemStorage>>,
 }
+#[derive(Clone)]
+pub struct CFGCenter(Arc<CFGCenterInner>);
 
 impl CFGCenter {
-    pub fn new(backend: Box<dyn storage_backends::StorageBackend>) -> Self {
-        let mem_store = Arc::new(RwLock::new(Box::new(MemStorage{
+    pub fn new() -> Self {
+        let mem_store = RwLock::new(Box::new(MemStorage{
             rule_stor: loader::RuleStorage::new(),
             res_stor: loader::ResStorage::new(),
             link_stor: loader::LinkStorage::new(),
-        })));
+        }));
 
-        return Self {
-            backend,
+        return CFGCenter(Arc::new(CFGCenterInner {
+            backend: Mutex::new(None),
             loader: loader::Loader::new(),
             mem_store,
-        };
+        }));
+    }
+
+
+    pub fn set_backend(&mut self, backend: Box<dyn storage_backends::StorageBackend + Send + Sync>) {
+        self.0.backend.lock().unwrap().replace(backend);
     }
 
     pub fn get_cfg(&self, ctx: &HashMap<String, Value>, key: &str) -> Result<(String, String), String> {
         let mut act_rules = Vec::new();
 
-        let mut mem_store = self
+        let mut mem_store = self.0
         .mem_store
         .read()
         .map_err(|e| e.to_string()).unwrap();
@@ -103,12 +113,15 @@ impl CFGCenter {
     }
 
     pub fn full_load_cfg(&self) {
-        self.loader.load_data(&self);
+        let new_conf = self.0.loader.load_data(&self.0).unwrap();
+        let mut mem_store = self.0.mem_store.write().unwrap();
+        let src = new_conf;
+        let dst = &mut *mem_store;
+        let _ = std::mem::replace(dst, src);
     }
-
-
-    
 }
+
+
 
 #[test]
 fn test_load_res_and_query() {
@@ -117,19 +130,45 @@ fn test_load_res_and_query() {
         .join("test")
         .join("mock_data")
         .join("filesystem_backend");
-    let backend = Box::new(filesystem::FilesystemBackend::new(base_path));
-    let cc = CFGCenter::new(backend);
-    cc.loader.load_data(&cc);
+    let mut backend = Box::new(filesystem::FilesystemBackend::new(base_path));
+    let mut cc = CFGCenter::new();
 
+    let cloned_cc_for_update = cc.clone();
+    backend.set_update_cb(Box::new(move |_|{
+        cloned_cc_for_update.full_load_cfg();
+    }));
 
-	let mut ctx = HashMap::new();
-	ctx.insert("foo".to_string(), Value::Str("123".to_string()));
-	ctx.insert("bar".to_string(), Value::Str("456".to_string()));
+    cc.set_backend(backend);
+    
+    cc.full_load_cfg();
 
-	for _ in 0..1000000 {
-		let t = cc.get_cfg(&ctx, "my_key").unwrap();
-	}
+    let cc1 = cc.clone();
+    let cc2 = cc.clone(); 
+
+    let t1  = thread::spawn(move ||{
+        let mut ctx = HashMap::new();
+        ctx.insert("foo".to_string(), Value::Str("123".to_string()));
+        ctx.insert("bar".to_string(), Value::Str("456".to_string()));
+
+        for i in 0..1000000000 {
+            let t = cc1.get_cfg(&ctx, "my_key").unwrap();
+        }
+    });
 	
+    let t2 = thread::spawn(move ||{
+        let mut ctx = HashMap::new();
+        ctx.insert("foo".to_string(), Value::Str("123".to_string()));
+        ctx.insert("bar".to_string(), Value::Str("456".to_string()));
+    
+        for _ in 0..1000000000 {
+            let t = cc2.get_cfg(&ctx, "my_key").unwrap();
+        }
+    });
+
+    t1.join();
+    t2.join();
+    
+    // thread::sleep(time::Duration::from_secs(10000))
 }
 
 

@@ -13,7 +13,7 @@ use std::ptr;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
-type CFGCenter = RwLock<cfg_center::CFGCenter>;
+type CFGCenter = cfg_center::CFGCenter;
 pub struct Context(HashMap<String, Value>);
 
 #[no_mangle]
@@ -22,7 +22,6 @@ pub extern "C" fn new_config_center_client(
     cb: Option<unsafe extern "C" fn(usre_data: *const c_void)>,
     user_data: *const c_void,
 ) -> *const CFGCenter {
-
     let t = unsafe {
         assert!(!cfg.is_null());
         CStr::from_ptr(cfg)
@@ -38,23 +37,27 @@ pub extern "C" fn new_config_center_client(
         Some(t) => t,
     };
 
-    let backend = match build_storage_backend_from_cfg(backend_cfg) {
+    let mut backend = match build_storage_backend_from_cfg(backend_cfg) {
         Err(_) => return ptr::null(),
         Ok(t) => t,
     };
 
+    let mut cc = cfg_center::CFGCenter::new();
 
+    let cc_for_update_cb = cc.clone();
     if let Some(cb) = cb {
-		let t = user_data as usize;
-        let rust_cb = Box::new(move |_| unsafe{cb(t as *const c_void )});
+        let t = user_data as usize;
+        let rust_cb = Box::new(move |_| {
+            cc_for_update_cb.full_load_cfg();
+            unsafe { cb(t as *const c_void) }
+        });
         backend.set_update_cb(rust_cb);
     }
 
-    let cc = cfg_center::CFGCenter::new(backend);
-
+    cc.set_backend(backend);
     cc.full_load_cfg();
 
-    let ret = Box::new(RwLock::new(cc));
+    let ret = Box::new(cc);
 
     Box::into_raw(ret)
 }
@@ -90,16 +93,12 @@ pub extern "C" fn get_config(
 ) -> *mut ConfigValue {
     let cc = unsafe { &*cc };
 
-    let cc = match cc.read() {
-        Err(_) => return ptr::null_mut(),
-        Ok(t) => t,
-    };
-
     let ctx = unsafe { &*ctx };
 
     let key = unsafe { CStr::from_ptr(key).to_string_lossy() };
 
-    let v = cc.get_cfg(&ctx.0, &key).unwrap();
+    let cc_ref = cc.clone();
+    let v = cc_ref.get_cfg(&ctx.0, &key).unwrap();
 
     Box::into_raw(Box::new(ConfigValue {
         content_type: CString::new(v.0).unwrap().into_raw(),
@@ -112,10 +111,9 @@ pub extern "C" fn free_config_value(v: *mut ConfigValue) {
     unsafe { Box::from_raw(v) };
 }
 
-
 fn build_storage_backend_from_cfg(
     cfg: &serde_json::Value,
-) -> Result<Box<dyn storage_backends::StorageBackend>, String> {
+) -> Result<Box<dyn storage_backends::StorageBackend + Send + Sync>, String> {
     let cfg = cfg.as_object().ok_or("cfg format error")?;
     let ty = cfg
         .get("type")
