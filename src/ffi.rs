@@ -70,18 +70,30 @@ pub extern "C" fn new_context(val: *const c_char) -> *const Context {
             ret.insert(k.trim().to_owned(), Value::Str(v.trim().to_owned()));
         }
     }
-    Box::into_raw(Box::new(Context(ret)))
+    let t = Box::into_raw(Box::new(Context(ret)));
+	// println!(">>{:?}", t);
+	t
 }
 
 #[no_mangle]
 pub extern "C" fn free_context(ctx: *mut Context) {
-    unsafe { Box::from_raw(ctx) };
+	// println!("<<{:?}", ctx);
+	let t =  unsafe { Box::from_raw(ctx) };
 }
 
 #[repr(C)]
 pub struct ConfigValue {
     content_type: *mut c_char,
     value: *mut c_char,
+}
+
+impl Drop for ConfigValue {
+	fn drop(&mut self) {
+		unsafe{
+			CString::from_raw(self.content_type);
+			CString::from_raw(self.value);
+		}
+	}
 }
 
 #[no_mangle]
@@ -121,7 +133,6 @@ pub extern "C" fn get_config(
 	ret.shrink_to_fit();
 	let mut ret = ManuallyDrop::new(ret);
 	let t = ret.as_mut_ptr();
-	println!("==={:#?}", t);
 	return t
 }
 
