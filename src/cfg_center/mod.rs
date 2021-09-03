@@ -3,8 +3,11 @@ mod loader;
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread;
 
+use crate::storage_backends::{StorageBackend, filesystem};
 use crate::{rule_engine::Value, storage_backends};
 
 
@@ -144,23 +147,25 @@ fn test_load_res_and_query() {
     let cc2 = cc.clone(); 
 
     let t1  = thread::spawn(move ||{
-        let mut ctx = HashMap::new();
-        ctx.insert("foo".to_string(), Value::Str("123".to_string()));
-        ctx.insert("bar".to_string(), Value::Str("456".to_string()));
 
-        let my_key = vec!["my_key","my_key","my_key"];
-        for i in 0..10000000 {
+        for i in 0..6000000 {
+            let mut ctx = HashMap::new();
+            ctx.insert("foo".to_string(), Value::Str("123".to_string()));
+            ctx.insert("bar".to_string(), Value::Str("456".to_string()));
+    
+            let my_key = vec!["my_key","my_key","my_key"];
             let t = cc1.get_cfg(&ctx, &my_key).unwrap();
         }
     });
 	
     let t2 = thread::spawn(move ||{
-        let mut ctx = HashMap::new();
-        ctx.insert("foo".to_string(), Value::Str("123".to_string()));
-        ctx.insert("bar".to_string(), Value::Str("456".to_string()));
-        
-        let my_key = vec!["my_key","my_key","my_key"];
-        for _ in 0..10000000 {
+
+        for _ in 0..6000000 {
+            let mut ctx = HashMap::new();
+            ctx.insert("foo".to_string(), Value::Str("123".to_string()));
+            ctx.insert("bar".to_string(), Value::Str("456".to_string()));
+            
+            let my_key = vec!["my_key","my_key","my_key"];
             let t = cc2.get_cfg(&ctx, &my_key).unwrap();
         }
     });

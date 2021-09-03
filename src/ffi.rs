@@ -76,9 +76,8 @@ pub extern "C" fn new_context(val: *const c_char) -> *const Context {
 }
 
 #[no_mangle]
-pub extern "C" fn free_context(ctx: *mut Context) {
-	// println!("<<{:?}", ctx);
-	let t =  unsafe { Box::from_raw(ctx) };
+pub extern "C" fn free_context(ctx: *mut Context) {	
+	unsafe { Box::from_raw(ctx) };
 }
 
 #[repr(C)]

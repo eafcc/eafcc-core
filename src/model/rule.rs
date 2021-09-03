@@ -2,7 +2,7 @@ use super::RootCommon;
 use crate::error::DataLoaderError;
 use crate::parser::rule;
 
-use crate::rule_engine::{LeafOperator, Rule, RuleMeta, RuleSpec, Value};
+use crate::rule_engine::{Condition, LeafOperator, Rule, RuleMeta, RuleSpec, Value};
 
 use serde_json;
 
