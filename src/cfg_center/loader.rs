@@ -42,21 +42,22 @@ impl Loader {
             pri: spec.pri,
             is_neg: spec.is_neg,
             reses_path: Vec::new(),
-            link_path: Arc::new(link_path.to_string()),
-            rule_path: Arc::new(spec.rule.clone()),
+            link_path: link_path.to_string(),
+            rule_path: spec.rule.clone(),
         };
 
         // load all res that this rule depends on
         for res in spec.reses.iter() {
             if res.starts_with("path:/") && res.len() > 6 {
                 let res = remove_path_type_prefix(&res);
-                
+
                 mem_store
                     .res_stor
                     .load_or_ref_res(res, |key| {
                         let oid = backend
-                        .get_hash_by_path("master", &("/reses".to_string() + &key))
-                        .map_err(|_| DataLoaderError::ObjectNotFoundError(key.to_owned())).unwrap();
+                            .get_hash_by_path("master", &("/reses".to_string() + &key))
+                            .map_err(|_| DataLoaderError::ObjectNotFoundError(key.to_owned()))
+                            .unwrap();
 
                         let res_raw_data = backend.get_obj_by_hash(&oid).unwrap();
                         let root = serde_json::from_slice::<RootCommon>(&res_raw_data).unwrap();
@@ -66,13 +67,15 @@ impl Loader {
                         let ret: Vec<_> = spec
                             .0
                             .into_iter()
-                            .map(|e| Arc::new(Resource {
-                                content_type: e.content_type,
-                                key: e.key,
-                                data: e.data,
-                            }))
+                            .map(|e| {
+                                Arc::new(KeyValuePair {
+                                    content_type: e.content_type,
+                                    key: e.key,
+                                    value: e.data,
+                                })
+                            })
                             .collect();
-                        return ret;
+                        return Resource { data: ret, res_path: Arc::new(res.to_owned())};
                     })
                     .map_err(|_| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
 
@@ -83,7 +86,6 @@ impl Loader {
                 ));
             }
         }
-
 
         if spec.rule.starts_with("path:/") && spec.rule.len() > 6 {
             let rule = remove_path_type_prefix(&spec.rule);
@@ -97,9 +99,9 @@ impl Loader {
 
                     let res_raw_data = backend.get_obj_by_hash(&oid).unwrap();
 
-                    return RuleWithPath{
+                    return RuleWithPath {
                         rule: load_rule(&res_raw_data).unwrap(),
-                        path: spec.rule.clone(),
+                        path: key.to_owned(),
                     };
                 })
                 .map_err(|_| DataLoaderError::ObjectNotFoundError((rule).to_owned()))?;
@@ -178,7 +180,7 @@ impl RuleStorage {
     ) -> Result<(), DataMemStorageError> {
         self.storage
             .entry(path.to_string())
-            .or_insert_with(|| Arc::new( loader(path) ));
+            .or_insert_with(|| Arc::new(loader(path)));
         return Ok(());
     }
 
@@ -189,14 +191,19 @@ impl RuleStorage {
     }
 }
 
-pub struct Resource {
+pub struct KeyValuePair {
     pub content_type: String,
     pub key: String,
-    pub data: String,
+    pub value: String,
+}
+
+pub struct Resource {
+    pub data: Vec<Arc<KeyValuePair>>,
+    pub(crate) res_path: Arc<String>,
 }
 
 pub struct ResStorage {
-    storage: HashMap<String, Vec<Arc<Resource>>>,
+    storage: HashMap<String, Resource>,
 }
 
 impl ResStorage {
@@ -206,30 +213,29 @@ impl ResStorage {
         };
     }
 
-    pub fn load_or_ref_res<F>(
-        &mut self,
-        key: &str,
-        loader: F,
-    ) -> Result<(), DataMemStorageError>
+    pub fn load_or_ref_res<F>(&mut self, key: &str, loader: F) -> Result<(), DataMemStorageError>
     where
-        F: Fn(&str) -> Vec<Arc<Resource>>,
+        F: Fn(&str) -> Resource,
     {
         self.storage
             .entry(key.to_owned())
-            .or_insert_with(||loader(key) );
+            .or_insert_with(|| loader(key));
 
         return Ok(());
     }
 
-    pub (crate) fn batch_get_res<F: FnMut(&Vec<Arc<Resource>>, &Arc<LinkInfo>, &str) -> bool>(&self, links: &Vec<&Arc<LinkInfo>>, mut cb: F) {
+    pub(crate) fn batch_get_res<F: FnMut(&Resource, &Arc<LinkInfo>, &str) -> bool>(
+        &self,
+        links: &Vec<&Arc<LinkInfo>>,
+        mut cb: F,
+    ) {
         for link in links {
             for res_path in &link.reses_path {
                 let val = self.storage.get(res_path).unwrap();
-                if cb(val, link, res_path.as_ref() ) {
+                if cb(val, link, res_path.as_ref()) {
                     break;
                 }
             }
-            
         }
     }
 }
@@ -237,8 +243,6 @@ impl ResStorage {
 pub struct LinkStorage {
     idx_rule_to_res: BTreeMap<String, Vec<Arc<LinkInfo>>>,
 }
-
-
 
 impl LinkStorage {
     pub fn new() -> Self {
@@ -259,11 +263,19 @@ impl LinkStorage {
         return Ok(());
     }
 
-    pub (crate) fn batch_get_links<F: FnMut(Vec<&Arc<LinkInfo>>)>(&self, s: Vec<Arc<RuleWithPath>>, mut cb: F) {
+    pub(crate) fn batch_get_links<F: FnMut(Vec<&Arc<LinkInfo>>)>(
+        &self,
+        s: Vec<Arc<RuleWithPath>>,
+        mut cb: F,
+    ) {
         let mut ret = Vec::new();
 
         for rule_info in s {
-            for target in self.idx_rule_to_res.get(remove_path_type_prefix(&rule_info.path)).unwrap() {
+            for target in self
+                .idx_rule_to_res
+                .get(&rule_info.path)
+                .unwrap()
+            {
                 ret.push(target);
             }
         }
@@ -273,5 +285,5 @@ impl LinkStorage {
 
 fn remove_path_type_prefix(i: &str) -> &str {
     // remove `path:`
-    return &i[5..]
+    return &i[5..];
 }

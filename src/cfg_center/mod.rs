@@ -7,11 +7,12 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
 
+use crate::model::link::LinkInfo;
 use crate::model::object::ObjectID;
 use crate::storage_backends::{filesystem, StorageBackend};
 use crate::{rule_engine::Value, storage_backends};
 
-use self::loader::{Resource, RuleWithPath};
+use self::loader::{KeyValuePair, RuleWithPath};
 
 pub struct MemStorage {
     rule_stor: loader::RuleStorage,
@@ -24,16 +25,14 @@ pub struct CFGCenterInner {
     mem_store: RwLock<Box<MemStorage>>,
 }
 
-pub struct CFGResultReason {
-    pub pri: f32,
-    pub is_neg: bool,
-    pub link_path: Arc<String>,
-    pub rule_path: Arc<String>,
-    pub res_path: String,
+pub struct LinkAndResInfo {
+    pub link: Arc<LinkInfo>,
+    pub res_path: Arc<String>,
 }
+
 pub struct CFGResult {
-    pub reason: Option<CFGResultReason>,
-    pub value: Arc<Resource>,
+    pub reason: Option<LinkAndResInfo>,
+    pub value: Arc<KeyValuePair>,
 }
 
 #[derive(Clone)]
@@ -102,16 +101,13 @@ impl CFGCenter {
                 mem_store
                     .res_stor
                     .batch_get_res(&links, |reses_of_a_link, link, res_path| {
-                        for res in reses_of_a_link {
+                        for res in &reses_of_a_link.data {
                             if res.key == *key {
                                 if !link.is_neg {
                                     let reason = if need_explain {
-                                        Some(CFGResultReason {
-                                            pri: link.pri,
-                                            is_neg: link.is_neg,
-                                            link_path: link.link_path.clone(),
-                                            rule_path: link.rule_path.clone(),
-                                            res_path: res_path.to_owned(),
+                                        Some(LinkAndResInfo {
+                                            link:link.clone(),
+                                            res_path: reses_of_a_link.res_path.clone()
                                         })
                                     } else {
                                         None
@@ -167,7 +163,7 @@ fn test_load_res_and_query() {
             ctx.insert("bar".to_string(), Value::Str("456".to_string()));
 
             let my_key = vec!["my_key", "my_key", "my_key"];
-            let t = cc1.get_cfg(&ctx, &my_key, true, false).unwrap();
+            let t = cc1.get_cfg(&ctx, &my_key, true, true).unwrap();
         }
     });
 
@@ -178,7 +174,7 @@ fn test_load_res_and_query() {
             ctx.insert("bar".to_string(), Value::Str("456".to_string()));
 
             let my_key = vec!["my_key", "my_key", "my_key"];
-            let t = cc2.get_cfg(&ctx, &my_key, true, false).unwrap();
+            let t = cc2.get_cfg(&ctx, &my_key, true, true).unwrap();
         }
     });
 

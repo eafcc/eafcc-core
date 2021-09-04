@@ -22,9 +22,9 @@ pub struct LinkSpec {
 
 
 pub struct LinkInfo {
-    pub reses_path: Vec<String>,
+    pub (crate) reses_path: Vec<String>,
     pub pri: f32,
     pub is_neg: bool,
-    pub link_path: Arc<String>,
-	pub rule_path: Arc<String>,
+    pub link_path: String,
+	pub rule_path: String,
 }
