@@ -1,4 +1,4 @@
-use crate::model::link::{LinkMeta, LinkSpec, LinkTarget};
+use crate::model::link::{LinkInfo, LinkMeta, LinkSpec};
 use crate::model::res::{ResMeta, ResSpec};
 use crate::model::rule::load_rule;
 use crate::storage_backends;
@@ -11,6 +11,7 @@ use serde_json;
 use crate::model::RootCommon;
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use super::{CFGCenterInner, MemStorage};
 
@@ -22,7 +23,7 @@ impl Loader {
     }
 
     pub fn load_by_link(
-        link_id: &str,
+        link_path: &str,
         link_data: &[u8],
         backend: &(dyn storage_backends::StorageBackend + Send + Sync),
         mem_store: &mut MemStorage,
@@ -37,27 +38,27 @@ impl Loader {
             ));
         }
 
-        let mut target = LinkTarget {
+        let mut target = LinkInfo {
             pri: spec.pri,
             is_neg: spec.is_neg,
-            target: Vec::new(),
-            link_id: link_id.to_string(),
+            reses_path: Vec::new(),
+            link_path: Arc::new(link_path.to_string()),
+            rule_path: Arc::new(spec.rule.clone()),
         };
 
         // load all res that this rule depends on
         for res in spec.reses.iter() {
             if res.starts_with("path:/") && res.len() > 6 {
-                let res = &res[5..];
-                let oid = backend
-                    .get_hash_by_path("master", &("/reses".to_string() + &res))
-                    .map_err(|_| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
-
-                // the following function call will increase the reference counter
-
+                let res = remove_path_type_prefix(&res);
+                
                 mem_store
                     .res_stor
-                    .load_or_ref_res(&oid, |key| {
-                        let res_raw_data = backend.get_obj_by_hash(key).unwrap();
+                    .load_or_ref_res(res, |key| {
+                        let oid = backend
+                        .get_hash_by_path("master", &("/reses".to_string() + &key))
+                        .map_err(|_| DataLoaderError::ObjectNotFoundError(key.to_owned())).unwrap();
+
+                        let res_raw_data = backend.get_obj_by_hash(&oid).unwrap();
                         let root = serde_json::from_slice::<RootCommon>(&res_raw_data).unwrap();
                         let _meta = serde_json::from_value::<ResMeta>(root.meta).unwrap();
                         let spec = serde_json::from_value::<ResSpec>(root.spec).unwrap();
@@ -65,17 +66,17 @@ impl Loader {
                         let ret: Vec<_> = spec
                             .0
                             .into_iter()
-                            .map(|e| Resource {
+                            .map(|e| Arc::new(Resource {
                                 content_type: e.content_type,
                                 key: e.key,
                                 data: e.data,
-                            })
+                            }))
                             .collect();
                         return ret;
                     })
                     .map_err(|_| DataLoaderError::ObjectNotFoundError(res.to_owned()))?;
 
-                target.target.push(oid);
+                target.reses_path.push(res.to_owned());
             } else {
                 return Err(DataLoaderError::ObjectNotFoundError(
                     "only support find object by path".to_string(),
@@ -83,9 +84,9 @@ impl Loader {
             }
         }
 
-        // the following function call will increase the reference counter
+
         if spec.rule.starts_with("path:/") && spec.rule.len() > 6 {
-            let rule = &spec.rule[5..];
+            let rule = remove_path_type_prefix(&spec.rule);
             mem_store
                 .rule_stor
                 .load_or_ref_rule(rule, |key| {
@@ -96,13 +97,16 @@ impl Loader {
 
                     let res_raw_data = backend.get_obj_by_hash(&oid).unwrap();
 
-                    return load_rule(&res_raw_data).unwrap();
+                    return RuleWithPath{
+                        rule: load_rule(&res_raw_data).unwrap(),
+                        path: spec.rule.clone(),
+                    };
                 })
                 .map_err(|_| DataLoaderError::ObjectNotFoundError((rule).to_owned()))?;
 
             mem_store
                 .link_stor
-                .add_rule(rule.to_string(), target)
+                .add_link(rule.to_string(), target)
                 .unwrap();
         } else {
             return Err(DataLoaderError::ObjectNotFoundError(
@@ -151,12 +155,14 @@ impl Loader {
 }
 
 #[derive(Debug)]
-struct StorageEntry<T> {
-    data: T,
+
+pub struct RuleWithPath {
+    pub rule: Rule,
+    pub path: String,
 }
 
 pub struct RuleStorage {
-    storage: BTreeMap<String, StorageEntry<Rule>>,
+    storage: BTreeMap<String, Arc<RuleWithPath>>,
 }
 
 impl RuleStorage {
@@ -165,21 +171,20 @@ impl RuleStorage {
         return Self { storage };
     }
 
-    pub fn load_or_ref_rule<F: Fn(&str) -> Rule>(
+    pub fn load_or_ref_rule<F: Fn(&str) -> RuleWithPath>(
         &mut self,
         path: &str,
         loader: F,
     ) -> Result<(), DataMemStorageError> {
         self.storage
             .entry(path.to_string())
-            .or_insert_with(|| StorageEntry { data: loader(path) });
+            .or_insert_with(|| Arc::new( loader(path) ));
         return Ok(());
     }
 
-    pub fn iter_with_prefix<F: FnMut(&String, &Rule)>(&self, mut cb: F) {
-        // println!("=======");
-        for (k, v) in self.storage.iter() {
-            cb(k, &v.data)
+    pub fn iter_with_prefix<F: FnMut(&Arc<RuleWithPath>)>(&self, mut cb: F) {
+        for (_, v) in self.storage.iter() {
+            cb(&v)
         }
     }
 }
@@ -191,7 +196,7 @@ pub struct Resource {
 }
 
 pub struct ResStorage {
-    storage: HashMap<Vec<u8>, StorageEntry<Vec<Resource>>>,
+    storage: HashMap<String, Vec<Arc<Resource>>>,
 }
 
 impl ResStorage {
@@ -203,32 +208,37 @@ impl ResStorage {
 
     pub fn load_or_ref_res<F>(
         &mut self,
-        key: ObjectIDRef,
+        key: &str,
         loader: F,
     ) -> Result<(), DataMemStorageError>
     where
-        F: Fn(ObjectIDRef) -> Vec<Resource>,
+        F: Fn(&str) -> Vec<Arc<Resource>>,
     {
         self.storage
-            .entry(key.to_vec())
-            .or_insert_with(|| StorageEntry { data: loader(key) });
+            .entry(key.to_owned())
+            .or_insert_with(||loader(key) );
 
         return Ok(());
     }
 
-    pub fn batch_get_res<F: FnMut(&Vec<Resource>) -> bool>(&self, s: &Vec<ObjectID>, mut cb: F) {
-        for oid in s {
-            let val = self.storage.get(oid).unwrap();
-            if cb(&val.data) {
-                break;
+    pub (crate) fn batch_get_res<F: FnMut(&Vec<Arc<Resource>>, &Arc<LinkInfo>, &str) -> bool>(&self, links: &Vec<&Arc<LinkInfo>>, mut cb: F) {
+        for link in links {
+            for res_path in &link.reses_path {
+                let val = self.storage.get(res_path).unwrap();
+                if cb(val, link, res_path.as_ref() ) {
+                    break;
+                }
             }
+            
         }
     }
 }
 
 pub struct LinkStorage {
-    idx_rule_to_res: BTreeMap<String, Vec<LinkTarget>>,
+    idx_rule_to_res: BTreeMap<String, Vec<Arc<LinkInfo>>>,
 }
+
+
 
 impl LinkStorage {
     pub fn new() -> Self {
@@ -237,26 +247,31 @@ impl LinkStorage {
         };
     }
 
-    pub fn add_rule(
+    pub fn add_link(
         &mut self,
         link_path: String,
-        link: LinkTarget,
+        link: LinkInfo,
     ) -> Result<(), DataMemStorageError> {
         self.idx_rule_to_res
             .entry(link_path)
             .or_default()
-            .push(link);
+            .push(Arc::new(link));
         return Ok(());
     }
 
-    pub fn batch_get_targets<F: FnMut(Vec<&LinkTarget>)>(&self, s: Vec<String>, mut cb: F) {
+    pub (crate) fn batch_get_links<F: FnMut(Vec<&Arc<LinkInfo>>)>(&self, s: Vec<Arc<RuleWithPath>>, mut cb: F) {
         let mut ret = Vec::new();
 
-        for rule_name in s {
-            for target in self.idx_rule_to_res.get(&rule_name).unwrap() {
+        for rule_info in s {
+            for target in self.idx_rule_to_res.get(remove_path_type_prefix(&rule_info.path)).unwrap() {
                 ret.push(target);
             }
         }
         cb(ret);
     }
+}
+
+fn remove_path_type_prefix(i: &str) -> &str {
+    // remove `path:`
+    return &i[5..]
 }

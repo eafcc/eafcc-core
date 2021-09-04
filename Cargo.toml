@@ -23,7 +23,7 @@ debug = true
 
 [profile.test]
 opt-level = 3
-debug = 2
+debug = true
 debug-assertions = false
 overflow-checks = false
 lto = false

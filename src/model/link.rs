@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use super::object::ObjectID;
@@ -18,9 +20,11 @@ pub struct LinkSpec {
     pub reses: Vec<String>,
 }
 
-pub struct LinkTarget {
-    pub target: Vec<ObjectID>,
+
+pub struct LinkInfo {
+    pub reses_path: Vec<String>,
     pub pri: f32,
     pub is_neg: bool,
-    pub link_id: String,
+    pub link_path: Arc<String>,
+	pub rule_path: Arc<String>,
 }
