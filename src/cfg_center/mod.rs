@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
-
 use crate::model::link::LinkInfo;
 use crate::model::object::ObjectID;
 use crate::storage_backends::{filesystem, StorageBackend};
@@ -33,6 +32,11 @@ pub struct LinkAndResInfo {
 pub struct CFGResult {
     pub reason: Option<LinkAndResInfo>,
     pub value: Arc<KeyValuePair>,
+}
+
+pub enum ViewMode {
+    OverlaidView,
+    AllLinkedResView,
 }
 
 #[derive(Clone)]
@@ -64,11 +68,10 @@ impl CFGCenter {
         &self,
         ctx: &HashMap<String, Value>,
         keys: &Vec<&str>,
-        overlay_view: bool,
-        need_explain:bool,
+        view_mode: ViewMode,
+        need_explain: bool,
     ) -> Result<Vec<CFGResult>, String> {
         let mut act_rules = Vec::new();
-
         let mem_store = self.0.mem_store.read().map_err(|e| e.to_string()).unwrap();
 
         mem_store.rule_stor.iter_with_prefix(|rule| {
@@ -80,7 +83,8 @@ impl CFGCenter {
         let mut ret = Err("No Result".into());
 
         let mut ret_buf = Vec::with_capacity(keys.len());
-        mem_store.link_stor.batch_get_links(act_rules, |mut links| {
+
+        let overlaid_handler = &mut (|mut links: Vec<&Arc<LinkInfo>>| {
             links.sort_unstable_by(|a, b| {
                 // safety: infinate value is filtered out when loading links from storage
                 if a.pri > b.pri {
@@ -106,13 +110,21 @@ impl CFGCenter {
                                 if !link.is_neg {
                                     let reason = if need_explain {
                                         Some(LinkAndResInfo {
-                                            link:link.clone(),
-                                            res_path: reses_of_a_link.res_path.clone()
+                                            link: link.clone(),
+                                            res_path: reses_of_a_link.res_path.clone(),
                                         })
                                     } else {
                                         None
                                     };
-                                    ret_buf.push(CFGResult { reason, value: res.clone()});
+                                    unsafe {
+                                        // safety: we can ensure only one of the closure will be called, so ret_buf can be mut borrowed in to closures
+                                        let mut t = &mut *(&ret_buf as *const Vec<CFGResult>
+                                            as *mut Vec<CFGResult>);
+                                        t.push(CFGResult {
+                                            reason,
+                                            value: res.clone(),
+                                        });
+                                    }
                                 }
                                 return true;
                             }
@@ -120,7 +132,47 @@ impl CFGCenter {
                         return false;
                     })
             }
-        });
+        }) as &mut dyn FnMut(Vec<&Arc<LinkInfo>>);
+
+        let all_linked_res_view_handler = &mut (|mut links: Vec<&Arc<LinkInfo>>| {
+            for key in keys {
+                mem_store
+                    .res_stor
+                    .batch_get_res(&links, |reses_of_a_link, link, res_path| {
+                        for res in &reses_of_a_link.data {
+                            if res.key == *key {
+                                let reason = if need_explain {
+                                    Some(LinkAndResInfo {
+                                        link: link.clone(),
+                                        res_path: reses_of_a_link.res_path.clone(),
+                                    })
+                                } else {
+                                    None
+                                };
+                                unsafe {
+                                    // safety: we can ensure only one of the closure will be called, so ret_buf can be mut borrowed in to closures
+                                    let mut t = &mut *(&ret_buf as *const Vec<CFGResult>
+                                        as *mut Vec<CFGResult>);
+                                    t.push(CFGResult {
+                                        reason,
+                                        value: res.clone(),
+                                    });
+                                }
+                            }
+                        }
+                        return false;
+                    })
+            }
+        }) as &mut dyn FnMut(Vec<&Arc<LinkInfo>>);
+
+        let batch_link_handler = match view_mode {
+            ViewMode::OverlaidView => overlaid_handler,
+            ViewMode::AllLinkedResView => all_linked_res_view_handler,
+        };
+
+        mem_store
+            .link_stor
+            .batch_get_links(act_rules, batch_link_handler);
         ret = Ok(ret_buf);
         return ret;
     }
@@ -163,7 +215,9 @@ fn test_load_res_and_query() {
             ctx.insert("bar".to_string(), Value::Str("456".to_string()));
 
             let my_key = vec!["my_key", "my_key", "my_key"];
-            let t = cc1.get_cfg(&ctx, &my_key, true, true).unwrap();
+            let t = cc1
+                .get_cfg(&ctx, &my_key, ViewMode::OverlaidView, true)
+                .unwrap();
         }
     });
 
@@ -174,7 +228,9 @@ fn test_load_res_and_query() {
             ctx.insert("bar".to_string(), Value::Str("456".to_string()));
 
             let my_key = vec!["my_key", "my_key", "my_key"];
-            let t = cc2.get_cfg(&ctx, &my_key, true, true).unwrap();
+            let t = cc2
+                .get_cfg(&ctx, &my_key, ViewMode::OverlaidView, true)
+                .unwrap();
         }
     });
 
