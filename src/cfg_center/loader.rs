@@ -263,10 +263,10 @@ impl LinkStorage {
         return Ok(());
     }
 
-    pub(crate) fn batch_get_links(
+    pub(crate) fn batch_get_links<F: FnMut(Vec<&Arc<LinkInfo>>)>(
         &self,
         s: Vec<Arc<RuleWithPath>>,
-        cb: &mut dyn FnMut(Vec<&Arc<LinkInfo>>),
+        mut cb: F,
     ) {
         let mut ret = Vec::new();
 

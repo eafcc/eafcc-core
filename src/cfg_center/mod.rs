@@ -3,7 +3,7 @@ mod loader;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread;
 
 use crate::model::link::LinkInfo;
@@ -82,98 +82,19 @@ impl CFGCenter {
 
         let mut ret = Err("No Result".into());
 
-        let mut ret_buf = Vec::with_capacity(keys.len());
 
-        let overlaid_handler = &mut (|mut links: Vec<&Arc<LinkInfo>>| {
-            links.sort_unstable_by(|a, b| {
-                // safety: infinate value is filtered out when loading links from storage
-                if a.pri > b.pri {
-                    return Ordering::Less;
-                } else if a.pri == b.pri {
-                    // if a is neg, no matter what b is, we can put a before b, if b is also neg, the order between a and b does not matter anymore
-                    return if a.is_neg {
-                        Ordering::Less
-                    } else {
-                        Ordering::Greater
-                    };
-                } else {
-                    return Ordering::Greater;
-                }
-            });
-
-            for key in keys {
-                mem_store
-                    .res_stor
-                    .batch_get_res(&links, |reses_of_a_link, link, res_path| {
-                        for res in &reses_of_a_link.data {
-                            if res.key == *key {
-                                if !link.is_neg {
-                                    let reason = if need_explain {
-                                        Some(LinkAndResInfo {
-                                            link: link.clone(),
-                                            res_path: reses_of_a_link.res_path.clone(),
-                                        })
-                                    } else {
-                                        None
-                                    };
-                                    unsafe {
-                                        // safety: we can ensure only one of the closure will be called, so ret_buf can be mut borrowed in to closures
-                                        let mut t = &mut *(&ret_buf as *const Vec<CFGResult>
-                                            as *mut Vec<CFGResult>);
-                                        t.push(CFGResult {
-                                            reason,
-                                            value: res.clone(),
-                                        });
-                                    }
-                                }
-                                return true;
-                            }
-                        }
-                        return false;
-                    })
-            }
-        }) as &mut dyn FnMut(Vec<&Arc<LinkInfo>>);
-
-        let all_linked_res_view_handler = &mut (|mut links: Vec<&Arc<LinkInfo>>| {
-            for key in keys {
-                mem_store
-                    .res_stor
-                    .batch_get_res(&links, |reses_of_a_link, link, res_path| {
-                        for res in &reses_of_a_link.data {
-                            if res.key == *key {
-                                let reason = if need_explain {
-                                    Some(LinkAndResInfo {
-                                        link: link.clone(),
-                                        res_path: reses_of_a_link.res_path.clone(),
-                                    })
-                                } else {
-                                    None
-                                };
-                                unsafe {
-                                    // safety: we can ensure only one of the closure will be called, so ret_buf can be mut borrowed in to closures
-                                    let mut t = &mut *(&ret_buf as *const Vec<CFGResult>
-                                        as *mut Vec<CFGResult>);
-                                    t.push(CFGResult {
-                                        reason,
-                                        value: res.clone(),
-                                    });
-                                }
-                            }
-                        }
-                        return false;
-                    })
-            }
-        }) as &mut dyn FnMut(Vec<&Arc<LinkInfo>>);
 
         let batch_link_handler = match view_mode {
-            ViewMode::OverlaidView => overlaid_handler,
-            ViewMode::AllLinkedResView => all_linked_res_view_handler,
+            ViewMode::OverlaidView => fetch_res_by_overlaid_view,
+            ViewMode::AllLinkedResView => fetch_res_by_all_linked_res_view,
         };
 
         mem_store
             .link_stor
-            .batch_get_links(act_rules, batch_link_handler);
-        ret = Ok(ret_buf);
+            .batch_get_links(act_rules, |links|{
+                let t = batch_link_handler(&*mem_store, keys, links, need_explain);
+                ret = Ok(t);
+            });
         return ret;
     }
 
@@ -184,6 +105,101 @@ impl CFGCenter {
         let dst = &mut *mem_store;
         let _ = std::mem::replace(dst, src);
     }
+}
+
+fn fetch_res_by_overlaid_view(
+    mem_store: &MemStorage,
+    keys: &Vec<&str>,
+    mut links: Vec<&Arc<LinkInfo>>,
+    need_explain: bool,
+) -> Vec<CFGResult> {
+    let mut ret_buf = Vec::with_capacity(keys.len());
+
+    links.sort_unstable_by(|a, b| {
+        // safety: infinate value is filtered out when loading links from storage
+        if a.pri > b.pri {
+            return Ordering::Less;
+        } else if a.pri == b.pri {
+            // if a is neg, no matter what b is, we can put a before b, if b is also neg, the order between a and b does not matter anymore
+            return if a.is_neg {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+        } else {
+            return Ordering::Greater;
+        }
+    });
+
+    for key in keys {
+        mem_store
+            .res_stor
+            .batch_get_res(&links, |reses_of_a_link, link, res_path| {
+                for res in &reses_of_a_link.data {
+                    if res.key == *key {
+                        if !link.is_neg {
+                            let reason = if need_explain {
+                                Some(LinkAndResInfo {
+                                    link: link.clone(),
+                                    res_path: reses_of_a_link.res_path.clone(),
+                                })
+                            } else {
+                                None
+                            };
+
+                            ret_buf.push(CFGResult {
+                                reason,
+                                value: res.clone(),
+                            });
+                        }
+                        return true;
+                    }
+                }
+                return false;
+            })
+    }
+    return ret_buf;
+}
+
+
+fn fetch_res_by_all_linked_res_view(
+    mem_store: &MemStorage,
+    keys: &Vec<&str>,
+    mut links: Vec<&Arc<LinkInfo>>,
+    need_explain: bool,
+) -> Vec<CFGResult> {
+    let mut ret_buf = Vec::with_capacity(keys.len());
+
+    for key in keys {
+        mem_store
+            .res_stor
+            .batch_get_res(&links, |reses_of_a_link, link, res_path| {
+                for res in &reses_of_a_link.data {
+                    if res.key == *key {
+                        let reason = if need_explain {
+                            Some(LinkAndResInfo {
+                                link: link.clone(),
+                                res_path: reses_of_a_link.res_path.clone(),
+                            })
+                        } else {
+                            None
+                        };
+                        unsafe {
+                            // safety: we can ensure only one of the closure will be called, so ret_buf can be mut borrowed in to closures
+                            let mut t = &mut *(&ret_buf as *const Vec<CFGResult>
+                                as *mut Vec<CFGResult>);
+                            t.push(CFGResult {
+                                reason,
+                                value: res.clone(),
+                            });
+                        }
+                    }
+                }
+                return false;
+            })
+    }
+
+    return ret_buf;
 }
 
 #[test]
