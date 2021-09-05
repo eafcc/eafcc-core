@@ -20,7 +20,7 @@ pub use crate::cfg_center::ViewMode;
 #[no_mangle]
 pub extern "C" fn new_config_center_client(
     cfg: *const c_char,
-    cb: Option<unsafe extern "C" fn(usre_data: *const c_void)>,
+    cb: Option<unsafe extern "C" fn(update_info: *const c_void, usre_data: *const c_void)>,
     user_data: *const c_void,
 ) -> *const CFGCenter {
     let t = unsafe {
@@ -50,7 +50,7 @@ pub extern "C" fn new_config_center_client(
         let t = user_data as usize;
         let rust_cb = Box::new(move |_| {
             cc_for_update_cb.full_load_cfg();
-            unsafe { cb(t as *const c_void) }
+            unsafe { cb(ptr::null(), t as *const c_void) }
         });
         backend.set_update_cb(rust_cb);
     }
@@ -120,6 +120,16 @@ impl Drop for ConfigValue {
             }
         }
     }
+}
+
+#[repr(C)]
+pub struct UpdateInfo {
+    pub event_cnt: u64,
+    pub events: *const UpdateInfoItem,
+}
+
+pub struct UpdateInfoItem {
+
 }
 
 #[no_mangle]

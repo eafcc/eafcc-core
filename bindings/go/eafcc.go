@@ -23,10 +23,14 @@ import (
 // #include <stdlib.h>
 // #include <stdbool.h>
 // #include <eafcc.h>
-// void update_cb_c(void *user_data);
-// void update_cb_go(void *user_data);
+// void update_cb_c(void *update_info, void *user_data);
+// void update_cb_go(void *update_info ,void *user_data);
 // typedef void (*eafcc_update_cb_fn)(void*);
 import "C"
+
+type UpdateInfo struct{
+
+}
 
 type CFGCenter struct {
 	sync.RWMutex
@@ -35,7 +39,7 @@ type CFGCenter struct {
 	cache      *lru.Cache
 	cacheSize  int
 	hashSalt   []byte
-	updateCB   func()
+	updateCB   func(*UpdateInfo)
 	hasherPool *sync.Pool
 }
 
@@ -92,20 +96,20 @@ func (s *eafccInstanceStorageForCGo) Get(p unsafe.Pointer) *CFGCenter {
 var eafccInstanceStorageForCGoInst = eafccInstanceStorageForCGo{store: make(map[unsafe.Pointer]*CFGCenter)}
 
 //export update_cb_go
-func update_cb_go(userData unsafe.Pointer) {
+func update_cb_go(updateInfo unsafe.Pointer, userData unsafe.Pointer) {
 	if cc := eafccInstanceStorageForCGoInst.Get(userData); cc != nil {
 		newCache := lru.New(cc.cacheSize)
 		cc.Lock()
 		defer cc.Unlock()
 		cc.cache = newCache
 		if cc.updateCB != nil {
-			cc.updateCB()
+			cc.updateCB(nil)
 		}
 
 	}
 }
 
-func NewCfgCenter(cfg string, updateCB func(), cacheSize int, cacheSalt []byte) *CFGCenter {
+func NewCfgCenter(cfg string, updateCB func(*UpdateInfo), cacheSize int, cacheSalt []byte) *CFGCenter {
 	ccfg := C.CString(cfg)
 	defer C.free(unsafe.Pointer(ccfg))
 
@@ -140,28 +144,28 @@ func NewCfgCenter(cfg string, updateCB func(), cacheSize int, cacheSalt []byte) 
 	return nil
 }
 
-func (c *CFGCenter) batchReadFromCache(ccCtx *CFGContext, keys []string, viewMode CFGViewMode, needExplain bool) (values []*CFGValue, missingKeys []string, missingCacheKeys []string) {
-	values = make([]*CFGValue, len(keys))
-	for idx, key := range keys {
+func (c *CFGCenter) batchReadFromCache(ccCtx *CFGContext, keys []string, viewMode CFGViewMode, needExplain bool) (values map[string][]*CFGValue, missingKeys []string, missingCacheKeysMap map[string]string) {
+	values = make(map[string][]*CFGValue, len(keys))
+	for _, key := range keys {
 		cacheKey := string(makeCacheKey(c.hasherPool, ccCtx, key, viewMode, needExplain))
 		if v, ok := c.cache.Get(cacheKey); ok {
-			values[idx] = v.(*CFGValue)
+			values[key] = v.([]*CFGValue)
 		} else {
 			if missingKeys == nil {
 				missingKeys = make([]string, 0, len(keys))
-				missingCacheKeys = make([]string, 0, len(keys))
+				missingCacheKeysMap = make(map[string]string, len(keys))
 			}
 			missingKeys = append(missingKeys, key)
-			missingCacheKeys = append(missingCacheKeys, cacheKey)
+			missingCacheKeysMap[key] = cacheKey
 		}
 	}
-	return values, missingKeys, missingCacheKeys
+	return values, missingKeys, missingCacheKeysMap
 }
 
-func (c *CFGCenter) GetCfg(ccCtx *CFGContext, keys []string, viewMode CFGViewMode, needExplain bool) []*CFGValue {
+func (c *CFGCenter) GetCfg(ccCtx *CFGContext, keys []string, viewMode CFGViewMode, needExplain bool) map[string][]*CFGValue {
 
 	c.RWMutex.RLock()
-	values, missingKeys, missingCacheKeys := c.batchReadFromCache(ccCtx, keys, viewMode, needExplain)
+	values, missingKeys, missingCacheKeysMap := c.batchReadFromCache(ccCtx, keys, viewMode, needExplain)
 	c.RWMutex.RUnlock()
 
 	if missingKeys == nil {
@@ -171,14 +175,14 @@ func (c *CFGCenter) GetCfg(ccCtx *CFGContext, keys []string, viewMode CFGViewMod
 	t := c.GetCfgRawNoCache(ccCtx, missingKeys, viewMode, needExplain)
 
 	c.RWMutex.Lock()
-	for idx, value := range t {
-		c.cache.Add(missingCacheKeys[idx], &value)
+	for key, value := range t {
+		c.cache.Add(missingCacheKeysMap[key], value)
 	}
 	c.RWMutex.Unlock()
 
 	// reload the full key list in case of update callback, we have to ensure that the returned value is from the same config version
 	c.RWMutex.RLock()
-	values, missingKeys, missingCacheKeys = c.batchReadFromCache(ccCtx, keys, viewMode, needExplain)
+	values, missingKeys, missingCacheKeysMap = c.batchReadFromCache(ccCtx, keys, viewMode, needExplain)
 	c.RWMutex.RUnlock()
 
 	return values
@@ -203,7 +207,7 @@ func makeCacheKey(pool *sync.Pool, ccCtx *CFGContext, key string, viewMode CFGVi
 	return t
 }
 
-func (c *CFGCenter) GetCfgRawNoCache(ccCtx *CFGContext, keys []string, viewMode CFGViewMode, needExplain bool) []CFGValue {
+func (c *CFGCenter) GetCfgRawNoCache(ccCtx *CFGContext, keys []string, viewMode CFGViewMode, needExplain bool) map[string][]*CFGValue {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -233,7 +237,7 @@ func (c *CFGCenter) GetCfgRawNoCache(ccCtx *CFGContext, keys []string, viewMode 
 
 	t := C.get_config((*C.eafcc_CFGCenter)(c.cc), (*C.eafcc_Context)(ccCtx.ctx), (**C.char)(unsafe.Pointer(&ckeys[0])), C.ulong(len(keys)), cViewMode, C.uchar(_needExplain))
 
-	ret := make([]CFGValue, 0, len(keys))
+	ret := make(map[string][]*CFGValue, len(keys))
 
 	for i := 0; i < len(keys); i++ {
 		tmpP := unsafe.Pointer(uintptr(unsafe.Pointer(t)) + uintptr(i)*unsafe.Sizeof(C.eafcc_ConfigValue{}))
@@ -254,7 +258,7 @@ func (c *CFGCenter) GetCfgRawNoCache(ccCtx *CFGContext, keys []string, viewMode 
 			}
 		}
 
-		ret = append(ret, CFGValue{key, contextType, value, reason})
+		ret[key] = append(ret[key], &CFGValue{key, contextType, value, reason})
 	}
 	C.free_config_value(t, C.ulong(len(keys)))
 	return ret
@@ -324,7 +328,7 @@ func test_raw_get() {
 				values := cc.GetCfgRawNoCache(ctx, []string{"my_key", "my_key", "my_key"}, CFGViewModeOverlaidView, false)
 				ctx.Free()
 
-				contextType, value := values[0].ContextType, values[0].Value
+				contextType, value := values["my_key"][0].ContextType, values["my_key"][0].Value
 				if contextType != "application/json" {
 					panic(contextType)
 				}
@@ -368,7 +372,7 @@ func test_cache_get() {
 				values := cc.GetCfg(ctx, []string{"my_key", "my_key", "my_key"}, CFGViewModeOverlaidView, false)
 				ctx.Free()
 
-				contextType, value := values[0].ContextType, values[0].Value
+				contextType, value := values["my_key"][0].ContextType, values["my_key"][0].Value
 				if contextType != "application/json" {
 					panic(contextType)
 				}
