@@ -23,9 +23,8 @@ import (
 // #include <stdlib.h>
 // #include <stdbool.h>
 // #include <eafcc.h>
-// void update_cb_c(void *update_info, void *user_data);
 // void update_cb_go(void *update_info ,void *user_data);
-// typedef void (*eafcc_update_cb_fn)(void*);
+// typedef void (*eafcc_update_cb_fn)(void*, void*);
 import "C"
 
 type UpdateInfo struct{
@@ -95,6 +94,7 @@ func (s *eafccInstanceStorageForCGo) Get(p unsafe.Pointer) *CFGCenter {
 
 var eafccInstanceStorageForCGoInst = eafccInstanceStorageForCGo{store: make(map[unsafe.Pointer]*CFGCenter)}
 
+// be careful, there must not have a space between `//`` and `export`
 //export update_cb_go
 func update_cb_go(updateInfo unsafe.Pointer, userData unsafe.Pointer) {
 	if cc := eafccInstanceStorageForCGoInst.Get(userData); cc != nil {
