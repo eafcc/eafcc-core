@@ -34,6 +34,7 @@ pub struct CFGResult {
     pub value: Arc<KeyValuePair>,
 }
 
+#[repr(u32)]
 pub enum ViewMode {
     OverlaidView,
     AllLinkedResView,

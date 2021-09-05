@@ -5,15 +5,17 @@ use serde_json;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ffi::{CStr, CString};
+use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 use std::path::PathBuf;
 use std::ptr;
-use std::str::FromStr;
 use std::slice;
-use std::mem::ManuallyDrop;
+use std::str::FromStr;
 
 type CFGCenter = cfg_center::CFGCenter;
 pub struct Context(HashMap<String, Value>);
+
+pub use crate::cfg_center::ViewMode;
 
 #[no_mangle]
 pub extern "C" fn new_config_center_client(
@@ -71,28 +73,53 @@ pub extern "C" fn new_context(val: *const c_char) -> *const Context {
         }
     }
     let t = Box::into_raw(Box::new(Context(ret)));
-	// println!(">>{:?}", t);
-	t
+    // println!(">>{:?}", t);
+    t
 }
 
 #[no_mangle]
-pub extern "C" fn free_context(ctx: *mut Context) {	
-	unsafe { Box::from_raw(ctx) };
+pub extern "C" fn free_context(ctx: *mut Context) {
+    unsafe { Box::from_raw(ctx) };
+}
+
+#[repr(C)]
+pub struct ConfigValueReason {
+    pub pri: f32,
+    pub is_neg: bool,
+    pub link_path: *mut c_char,
+    pub rule_path: *mut c_char,
+    pub res_path: *mut c_char,
+}
+
+impl Drop for ConfigValueReason {
+    fn drop(&mut self) {
+        unsafe {
+            CString::from_raw(self.link_path);
+            CString::from_raw(self.rule_path);
+            CString::from_raw(self.res_path);
+        }
+    }
 }
 
 #[repr(C)]
 pub struct ConfigValue {
+    key: *mut c_char,
     content_type: *mut c_char,
     value: *mut c_char,
+    reason: *mut ConfigValueReason,
 }
 
 impl Drop for ConfigValue {
-	fn drop(&mut self) {
-		unsafe{
-			CString::from_raw(self.content_type);
-			CString::from_raw(self.value);
-		}
-	}
+    fn drop(&mut self) {
+        unsafe {
+            CString::from_raw(self.key);
+            CString::from_raw(self.content_type);
+            CString::from_raw(self.value);
+            if !self.reason.is_null() {
+                Box::from_raw(self.reason);
+            }
+        }
+    }
 }
 
 #[no_mangle]
@@ -100,44 +127,64 @@ pub extern "C" fn get_config(
     cc: *const CFGCenter,
     ctx: *const Context,
     keys: *mut *mut c_char,
-	key_cnt: usize,
+    key_cnt: usize,
+    view_mode: ViewMode,
+    need_explain: u8,
 ) -> *mut ConfigValue {
     let cc = unsafe { &*cc };
 
     let ctx = unsafe { &*ctx };
 
     let key = unsafe {
-		let mut ret = Vec::with_capacity(key_cnt);
-		for key in slice::from_raw_parts(keys, key_cnt) {
-			if let Ok(t) = CStr::from_ptr(*key).to_str() {
-				ret.push(t);
-			} else {
-				return ptr::null_mut();
-			}
-		}
-		ret
-	};
+        let mut ret = Vec::with_capacity(key_cnt);
+        for key in slice::from_raw_parts(keys, key_cnt) {
+            if let Ok(t) = CStr::from_ptr(*key).to_str() {
+                ret.push(t);
+            } else {
+                return ptr::null_mut();
+            }
+        }
+        ret
+    };
 
     let cc_ref = cc.clone();
-    let vs = cc_ref.get_cfg(&ctx.0, &key).unwrap();
+    let vs = cc_ref
+        .get_cfg(&ctx.0, &key, view_mode, if need_explain==0 {false} else {true})
+        .unwrap();
 
-	let mut ret = Vec::with_capacity(key_cnt);
-	for v in vs {
-		ret.push(ConfigValue {
-			content_type: CString::new(v.0).unwrap().into_raw(),
-			value: CString::new(v.1).unwrap().into_raw(),
-		});
-	}
-	
-	ret.shrink_to_fit();
-	let mut ret = ManuallyDrop::new(ret);
-	let t = ret.as_mut_ptr();
-	return t
+    let mut ret = Vec::with_capacity(key_cnt);
+    for v in vs {
+
+        let reason = match v.reason {
+            Some(r) => Box::into_raw(Box::new(ConfigValueReason{
+                pri: r.link.pri,
+                is_neg: r.link.is_neg,
+                rule_path: CString::new(&r.link.rule_path[..]).unwrap().into_raw(),
+                link_path: CString::new(&r.link.link_path[..]).unwrap().into_raw(),
+                res_path: CString::new(&(*r.res_path)[..]).unwrap().into_raw(),
+            })),
+            None => ptr::null_mut(),
+        };
+
+        let item = ConfigValue {
+            content_type: CString::new(&v.value.content_type[..]).unwrap().into_raw(),
+            key: CString::new(&v.value.key[..]).unwrap().into_raw(),
+            value: CString::new(&v.value.value[..]).unwrap().into_raw(),
+            reason
+        };
+
+        ret.push(item);
+    }
+
+    ret.shrink_to_fit();
+    let mut ret = ManuallyDrop::new(ret);
+    let t = ret.as_mut_ptr();
+    return t;
 }
 
 #[no_mangle]
 pub extern "C" fn free_config_value(v: *mut ConfigValue, n: usize) {
-    unsafe { Vec::from_raw_parts(v, n, n)};
+    unsafe { Vec::from_raw_parts(v, n, n) };
 }
 
 fn build_storage_backend_from_cfg(
