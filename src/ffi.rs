@@ -47,10 +47,10 @@ pub extern "C" fn new_config_center_client(
 
     let cc_for_update_cb = cc.clone();
     if let Some(cb) = cb {
-        let t = user_data as usize;
+        let user_data = user_data as usize;
         let rust_cb = Box::new(move |_| {
             cc_for_update_cb.full_load_cfg();
-            unsafe { cb(ptr::null(), t as *const c_void) }
+            unsafe { cb(ptr::null(), user_data as *const c_void) }
         });
         backend.set_update_cb(rust_cb);
     }
@@ -129,7 +129,15 @@ pub struct UpdateInfo {
 }
 
 pub struct UpdateInfoItem {
-
+    pub event_type: UpdateInfoEventType,
+    pub key: *mut char,
+}
+#[repr(u32)]
+pub enum UpdateInfoEventType {
+    KeyCreate = 1,
+    KeyModify = 2,
+    KeyDelete = 3,
+    KeyNotSure = 4,
 }
 
 #[no_mangle]

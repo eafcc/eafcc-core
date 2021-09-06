@@ -72,8 +72,19 @@ impl CFGCenter {
         view_mode: ViewMode,
         need_explain: bool,
     ) -> Result<Vec<CFGResult>, String> {
+        return self.get_cfg_of_mem_store(&self.0.mem_store, ctx, keys, view_mode, need_explain);
+    }
+
+    pub fn get_cfg_of_mem_store(
+        &self,
+        mem_store: &RwLock<Box<MemStorage>>,
+        ctx: &HashMap<String, Value>,
+        keys: &Vec<&str>,
+        view_mode: ViewMode,
+        need_explain: bool,
+    ) -> Result<Vec<CFGResult>, String> {
         let mut act_rules = Vec::new();
-        let mem_store = self.0.mem_store.read().map_err(|e| e.to_string()).unwrap();
+        let mem_store = mem_store.read().map_err(|e| e.to_string()).unwrap();
 
         mem_store.rule_stor.iter_with_prefix(|rule| {
             if rule.rule.spec.rule.eval(ctx) {
@@ -99,12 +110,13 @@ impl CFGCenter {
         return ret;
     }
 
-    pub fn full_load_cfg(&self) {
+    pub fn full_load_cfg(&self) -> Box<MemStorage>{
         let new_conf = self.0.loader.load_data(&self.0).unwrap();
         let mut mem_store = self.0.mem_store.write().unwrap();
         let src = new_conf;
         let dst = &mut *mem_store;
-        let _ = std::mem::replace(dst, src);
+        let old_mem_store = std::mem::replace(dst, src);
+        return old_mem_store;
     }
 }
 
