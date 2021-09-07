@@ -112,8 +112,12 @@ impl CFGCenter {
 
     pub fn full_load_cfg(&self) -> Box<MemStorage>{
         let new_conf = self.0.loader.load_data(&self.0).unwrap();
+        return new_conf
+    }
+    
+    pub fn replace_current_mem_store(&self, new_mem_store: Box<MemStorage>) -> Box<MemStorage>{
         let mut mem_store = self.0.mem_store.write().unwrap();
-        let src = new_conf;
+        let src = new_mem_store;
         let dst = &mut *mem_store;
         let old_mem_store = std::mem::replace(dst, src);
         return old_mem_store;
@@ -227,12 +231,14 @@ fn test_load_res_and_query() {
 
     let cloned_cc_for_update = cc.clone();
     backend.set_update_cb(Box::new(move |_| {
-        cloned_cc_for_update.full_load_cfg();
+        let new_mem_store = cloned_cc_for_update.full_load_cfg();
+        cloned_cc_for_update.replace_current_mem_store(new_mem_store);
     }));
 
     cc.set_backend(backend);
 
-    cc.full_load_cfg();
+    let new_mem_store = cc.full_load_cfg();
+    cc_for_update_cb.replace_current_mem_store(new_mem_store);
 
     let cc1 = cc.clone();
     let cc2 = cc.clone();
