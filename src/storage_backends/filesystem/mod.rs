@@ -21,7 +21,6 @@ This backend is for develop and testing, Never use this backend in production, b
 pub struct FilesystemBackend {
     hash_2_path: HashMap<ObjectID, PathBuf>,
     base_path: PathBuf,
-    current_version: Arc<Mutex<String>>,
 }
 
 impl FilesystemBackend {
@@ -29,11 +28,7 @@ impl FilesystemBackend {
         let ret = Self {
             hash_2_path: HashMap::new(),
             base_path,
-            current_version: Arc::new(Mutex::new("".to_owned())),
         };
-        let mut g = ret.current_version.lock().unwrap();
-        *g = ret.get_current_version().unwrap();
-        drop(g);
         return ret;
     }
 
@@ -105,15 +100,10 @@ impl StorageBackend for FilesystemBackend {
 
         let path = self.base_path.join("head");
 
-        let cur_ver_ref = self.current_version.clone();
         let cb_inner = Box::new(move |new_version: String| {
-            let mut old_version = cur_ver_ref.lock().unwrap();
-            let ov_clone = old_version.clone();
             cb(StorageChangeEvent{
-                old_version:ov_clone,
                 new_version: new_version.clone(),
             });
-            *old_version = new_version
         });
         thread::spawn(move || {
             eafcc_watcher(
@@ -124,7 +114,7 @@ impl StorageBackend for FilesystemBackend {
         
     }
 
-    fn get_diff_list(&self, old_version: &str, new_version: &str) -> Result<Vec<String>>{
+    fn get_diff_list(&self, old_version: &str, new_version: &str, namespace: &str) -> Result<Vec<String>>{
         return Ok(Vec::new())
     }
 

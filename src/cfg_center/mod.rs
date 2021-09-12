@@ -4,6 +4,7 @@ mod mem_store;
 mod querier;
 mod cfg_center;
 
+use core::time;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -26,9 +27,9 @@ fn test_load_res_and_query() {
         .join("mock_data")
         .join("filesystem_backend");
     let mut backend = Box::new(filesystem::FilesystemBackend::new(base_path));
-    let mut cc = CFGCenter::new(backend);
+    let mut cc = CFGCenter::new(backend).unwrap();
     
-    let cfg_ns = cc.create_namespace_scoped_cfg_center("/").unwrap();
+    let cfg_ns = cc.create_namespace_scoped_cfg_center("/", cfg_center::UpdateNotifyLevel::NotifyWithoutChangedKeysByGlobal).unwrap();
 
     let cc1 = cfg_ns.clone();
     let cc2 = cfg_ns.clone();
@@ -43,7 +44,8 @@ fn test_load_res_and_query() {
             let t = cc1
                 .get_cfg(&ctx, &my_key, ViewMode::OverlaidView, true)
                 .unwrap();
-            assert!(t.len() == 3)
+            println!("{}", t[0].value.value);
+            thread::sleep(time::Duration::from_secs(1));
         }
     });
 
