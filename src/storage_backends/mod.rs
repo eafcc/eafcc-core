@@ -7,7 +7,6 @@ use crate::model::object::{ObjectID, ObjectIDRef};
 pub struct StorageChangeEvent {
 	old_version: String,
 	new_version: String,
-	path: String,
 }
 
 pub struct DirItem {
@@ -25,5 +24,8 @@ pub trait StorageBackend {
 	fn get_obj_by_hash(&self, hash: ObjectIDRef) -> Result<Vec<u8>>;
 	fn list_dir(&self, version: &str, path: &str) -> Result<Vec<DirItem>>;
 	fn get_hash_by_path(&self, version: &str, path: &str) -> Result<ObjectID>;
-	fn set_update_cb(&mut self, cb: Box<dyn Fn(Vec<StorageChangeEvent>) + Send + Sync + 'static>);
+	fn set_update_cb(&self, cb: Box<dyn Fn(StorageChangeEvent) + Send + Sync + 'static>);
+	fn get_diff_list(&self, old_version: &str, new_version: &str) -> Result<Vec<String>>;
+	fn get_current_version(&self) -> Result<String>;
+	fn list_versions(&self) -> Result<Vec<String>>;
 }

@@ -1,5 +1,5 @@
 use crate::model::object::{ObjectID, ObjectIDRef};
-use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, mpsc::channel}};
+use std::{cell::Cell, collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, mpsc::channel}};
 
 use super::{DirItem, StorageBackend, StorageChangeEvent};
 use notify::{watcher, RecursiveMode, Watcher, DebouncedEvent};
@@ -21,7 +21,7 @@ This backend is for develop and testing, Never use this backend in production, b
 pub struct FilesystemBackend {
     hash_2_path: HashMap<ObjectID, PathBuf>,
     base_path: PathBuf,
-    cb: Option<Arc<dyn Fn(Vec<StorageChangeEvent>) + Send + Sync >>,
+    current_version: Arc<Mutex<String>>,
 }
 
 impl FilesystemBackend {
@@ -29,9 +29,21 @@ impl FilesystemBackend {
         let ret = Self {
             hash_2_path: HashMap::new(),
             base_path,
-            cb: None,
+            current_version: Arc::new(Mutex::new("".to_owned())),
         };
+        let mut g = ret.current_version.lock().unwrap();
+        *g = ret.get_current_version().unwrap();
+        drop(g);
         return ret;
+    }
+
+    fn get_versioned_path(&self, version: &str, path: &str) -> PathBuf {
+        let t = self.base_path.join(version);
+        if path.starts_with("/") {
+            t.join(&path[1..])
+        } else {
+            t.join(path)
+        }
     }
 }
 
@@ -47,11 +59,7 @@ impl StorageBackend for FilesystemBackend {
     fn list_dir(&self, version: &str, path: &str) -> Result<Vec<DirItem>> {
         let mut ret = Vec::new();
 
-        let path = if path.starts_with("/") {
-            self.base_path.join(&path[1..])
-        } else {
-            self.base_path.join(path)
-        };
+        let path = self.get_versioned_path(version, path);
 
         for t in fs::read_dir(path)? {
             let path = t?.path();
@@ -78,11 +86,7 @@ impl StorageBackend for FilesystemBackend {
     }
 
     fn get_hash_by_path(&self, version: &str, path: &str) -> Result<ObjectID> {
-        let path = if path.starts_with("/") {
-            self.base_path.join(&path[1..])
-        } else {
-            self.base_path.join(path)
-        };
+        let path = self.get_versioned_path(version, path);
         if let Ok(m) = fs::metadata(&path) {
             if m.is_file() {
                 return Ok(Vec::from(path.to_str().ok_or(std::io::Error::new(
@@ -97,24 +101,47 @@ impl StorageBackend for FilesystemBackend {
         ));
     }
 
-    fn set_update_cb(&mut self, cb: Box<dyn Fn(Vec<StorageChangeEvent>) + Send + Sync>) {
-        if self.cb.is_none() {
-            let t:Arc<dyn Fn(Vec<StorageChangeEvent>) + Send + Sync> = Arc::from(cb);
-            self.cb = Some(t);
-            let path = self.base_path.to_string_lossy().to_string();
-            let cb = self.cb.clone().unwrap();
-            thread::spawn(move || {
-                eafcc_watcher(
-                    path,
-                    cb,
-                )
+    fn set_update_cb(&self, cb: Box<dyn Fn(StorageChangeEvent) + Send + Sync>) {
+
+        let path = self.base_path.join("head");
+
+        let cur_ver_ref = self.current_version.clone();
+        let cb_inner = Box::new(move |new_version: String| {
+            let mut old_version = cur_ver_ref.lock().unwrap();
+            let ov_clone = old_version.clone();
+            cb(StorageChangeEvent{
+                old_version:ov_clone,
+                new_version: new_version.clone(),
             });
-        }
+            *old_version = new_version
+        });
+        thread::spawn(move || {
+            eafcc_watcher(
+                path,
+                cb_inner,
+            )
+        });
+        
+    }
+
+    fn get_diff_list(&self, old_version: &str, new_version: &str) -> Result<Vec<String>>{
+        return Ok(Vec::new())
+    }
+
+	fn get_current_version(&self) -> Result<String>{
+        read_version_from_fs(&self.base_path.join("head"))
+    }
+	fn list_versions(&self) -> Result<Vec<String>>{
+        return Ok(Vec::new())
     }
 }
 
+fn read_version_from_fs(path: &Path) -> Result<String>{
+    let t = fs::read(path)?;
+    Ok(String::from_utf8(t).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?)
+}
 
-fn eafcc_watcher(path: String, cb: Arc<dyn Fn(Vec<StorageChangeEvent>)>) {
+fn eafcc_watcher(path: PathBuf, cb: Box<dyn Fn(String)>) {
     // Create a channel to receive the events.
     let (tx, rx) = channel();
 
@@ -130,7 +157,11 @@ fn eafcc_watcher(path: String, cb: Arc<dyn Fn(Vec<StorageChangeEvent>)>) {
         match rx.recv() {
             Ok(event) => {
                 match event {
-                    DebouncedEvent::Chmod(_) | DebouncedEvent::Create(_) | DebouncedEvent::Remove(_) | DebouncedEvent::Rename(_,_) | DebouncedEvent::Rescan | DebouncedEvent::Write(_) => cb(Vec::new()),
+                    DebouncedEvent::Chmod(_) | DebouncedEvent::Create(_) | DebouncedEvent::Remove(_) | DebouncedEvent::Rename(_,_) | DebouncedEvent::Rescan | DebouncedEvent::Write(_) => {
+                        if let Ok(new_version) = read_version_from_fs(&path){
+                            cb(new_version)
+                        }
+                    },
                     _ => continue,
                 }
                 

@@ -1,28 +1,11 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct RuleMeta {
-    pub desc: String,
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct RuleSpec {
-    pub rule: Condition,
-}
-#[derive(Debug, PartialEq)]
-pub struct Rule {
-    pub meta: RuleMeta,
-    pub spec: RuleSpec,
-}
-
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum LeafOperator {
     Eq,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Condition {
     And(Vec<Condition>),
     Or(Vec<Condition>),
@@ -34,12 +17,12 @@ pub enum Condition {
     },
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Value {
     Str(String),
 }
 
-type MatchContext = HashMap<String, Value>;
+pub type MatchContext = HashMap<String, Value>;
 
 impl Condition {
     pub fn eval(&self, ctx: &MatchContext) -> bool {
