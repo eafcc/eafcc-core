@@ -8,7 +8,7 @@ use crate::storage_backends::{filesystem, StorageBackend, StorageChangeEvent};
 use crate::{rule_engine::Value, storage_backends};
 
 use super::mem_store::MemStorage;
-use super::namespace::NamespaceScopedCFGCenter;
+use super::namespace::{NamespaceScopedCFGCenter, UpdateEventItem};
 use super::querier::CFGResult;
 
 pub struct CFGCenterInner {
@@ -16,7 +16,7 @@ pub struct CFGCenterInner {
 	// so it's ok and should make the backend not mutable
     backend: Arc<dyn storage_backends::StorageBackend + Send + Sync>,
     namespaces: Mutex<HashMap<String, Arc<NamespaceScopedCFGCenter>>>,
-	curent_version: Mutex<String>,
+	current_version: Mutex<String>,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -54,12 +54,13 @@ impl CFGCenterInner {
         &self,
         namespace: &str,
         notify_level: UpdateNotifyLevel,
+		callback: Option<Box<dyn Fn(UpdateNotifyLevel, Vec<UpdateEventItem>)+ Send + Sync>>,
     ) -> Result<Arc<NamespaceScopedCFGCenter>, String> {
         if !namespace.starts_with("/") || !namespace.ends_with("/") {
             return Err("namespace must starts and end with `/`".to_owned());
         }
 
-		let cur_version = self.curent_version.lock().map_err(|e|e.to_string())?;
+		let cur_version = self.current_version.lock().map_err(|e|e.to_string())?;
 
         let mem_store = Box::new(MemStorage::new(self.backend.as_ref(), namespace, &cur_version));
 
@@ -67,6 +68,7 @@ impl CFGCenterInner {
             namespace,
             mem_store,
             notify_level,
+			callback,
         ));
 
         let mut namespaces = self
@@ -83,7 +85,7 @@ impl CFGCenterInner {
             Err(_) => return,
         };
 
-		let mut old_version = match self.curent_version.lock() {
+		let mut old_version = match self.current_version.lock() {
 			Ok(t) => t,
             Err(_) => return,
 		};
@@ -142,7 +144,7 @@ impl CFGCenter {
         let inner = Arc::new(CFGCenterInner {
             backend: Arc::from(backend),
             namespaces: Mutex::new(HashMap::new()),
-			curent_version: Mutex::new(version),
+			current_version: Mutex::new(version),
         });
 
         let inner_for_capture = inner.clone();
@@ -165,9 +167,10 @@ impl CFGCenter {
         &self,
         namespace: &str,
         notify_level: UpdateNotifyLevel,
+		callback: Option<Box<dyn Fn(UpdateNotifyLevel, Vec<UpdateEventItem>) + Send + Sync>>,
     ) -> Result<Arc<NamespaceScopedCFGCenter>, String> {
         return self
             .0
-            .create_namespace_scoped_cfg_center(namespace, notify_level);
+            .create_namespace_scoped_cfg_center(namespace, notify_level, callback);
     }
 }

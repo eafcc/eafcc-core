@@ -6,20 +6,34 @@ use super::{cfg_center::{UpdateNotifyLevel, ViewMode}, cfgindex::IndexBuilder, m
 
 
 
+#[repr(u32)]
+pub enum UpdateInfoEventType {
+    KeyCreate = 1,
+    KeyModify = 2,
+    KeyDelete = 3,
+    KeyNotSure = 4,
+}
+
+pub struct UpdateEventItem {
+    pub event_type: UpdateInfoEventType,
+    pub key: String,
+}
 
 
 pub struct NamespaceScopedCFGCenter {
-	namespace: String,
-	current_memstore: RwLock<Box<MemStorage>>,
+	pub (crate)namespace: String,
+	pub (crate)current_memstore: RwLock<Box<MemStorage>>,
 	pub (crate) notify_level: UpdateNotifyLevel,
+	pub (crate )callback: Option<Box<dyn Fn(UpdateNotifyLevel, Vec<UpdateEventItem>) + Send + Sync>>,
 }
 
 impl NamespaceScopedCFGCenter {
-	pub (crate) fn new(namespace: &str, mem_store: Box<MemStorage>, notify_level: UpdateNotifyLevel) -> Self {
+	pub (crate) fn new(namespace: &str, mem_store: Box<MemStorage>, notify_level: UpdateNotifyLevel, callback: Option<Box<dyn Fn(UpdateNotifyLevel, Vec<UpdateEventItem>) + Send + Sync>>) -> Self {
 		let ret = NamespaceScopedCFGCenter{
 			namespace: namespace.to_owned(),
 			current_memstore: RwLock::new(mem_store),
-			notify_level
+			notify_level,
+			callback,
 		};
 
 		ret

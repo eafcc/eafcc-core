@@ -132,13 +132,6 @@ pub struct UpdateInfoItem {
     pub event_type: UpdateInfoEventType,
     pub key: *mut char,
 }
-#[repr(u32)]
-pub enum UpdateInfoEventType {
-    KeyCreate = 1,
-    KeyModify = 2,
-    KeyDelete = 3,
-    KeyNotSure = 4,
-}
 
 #[no_mangle]
 pub extern "C" fn get_config(

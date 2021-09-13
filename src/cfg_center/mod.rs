@@ -29,7 +29,7 @@ fn test_load_res_and_query() {
     let mut backend = Box::new(filesystem::FilesystemBackend::new(base_path));
     let mut cc = CFGCenter::new(backend).unwrap();
     
-    let cfg_ns = cc.create_namespace_scoped_cfg_center("/", cfg_center::UpdateNotifyLevel::NotifyWithoutChangedKeysByGlobal).unwrap();
+    let cfg_ns = cc.create_namespace_scoped_cfg_center("/", cfg_center::UpdateNotifyLevel::NotifyWithoutChangedKeysByGlobal, Some(Box::new(|_,_|{}))).unwrap();
 
     let cc1 = cfg_ns.clone();
     let cc2 = cfg_ns.clone();
