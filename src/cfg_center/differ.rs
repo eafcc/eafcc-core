@@ -1,6 +1,8 @@
-use crate::{rule_engine::MatchContext, storage_backends::StorageBackend};
+use crate::{error::DifferError, rule_engine::MatchContext, storage_backends::StorageBackend};
 
 use super::{cfg_center::{UpdateNotifyLevel, ViewMode}, mem_store::MemStorage, querier::{CFGResult, Querier}};
+
+type Result<T> = std::result::Result<T, DifferError>;
 
 pub struct Differ<'a> {
 	notify_level: UpdateNotifyLevel,
@@ -36,8 +38,8 @@ impl <'a> Differ<'a> {
         keys: &Vec<&str>,
         view_mode: ViewMode,
         need_explain: bool,
-    ) -> Result<Vec<CFGResult>, String>{
-		Querier::get(self.old_mem_store, whoami, keys, view_mode, need_explain)
+    ) -> Result<Vec<CFGResult>>{
+		Ok(Querier::get(self.old_mem_store, whoami, keys, view_mode, need_explain)?)
     }
 
     pub fn get_from_new(
@@ -46,7 +48,7 @@ impl <'a> Differ<'a> {
         keys: &Vec<&str>,
         view_mode: ViewMode,
         need_explain: bool,
-    ) -> Result<Vec<CFGResult>, String>{
-		Querier::get(self.new_mem_store, whoami, keys, view_mode, need_explain)
+    ) -> Result<Vec<CFGResult>>{
+		Ok(Querier::get(self.new_mem_store, whoami, keys, view_mode, need_explain)?)
     }
 }

@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use crate::{rule_engine::MatchContext, storage_backends};
+use crate::{error::QueryError, rule_engine::MatchContext, storage_backends};
 
 use super::{
     cfg_center::{UpdateNotifyLevel, ViewMode},
@@ -9,6 +9,8 @@ use super::{
     mem_store::MemStorage,
     querier::{CFGResult, Querier},
 };
+
+type Result<T> = std::result::Result<T, QueryError>;
 
 #[repr(u32)]
 pub enum UpdateInfoEventType {
@@ -56,8 +58,8 @@ impl NamespaceScopedCFGCenter {
         keys: &Vec<&str>,
         view_mode: ViewMode,
         need_explain: bool,
-    ) -> Result<Vec<CFGResult>, String> {
-        let current_memstore = self.current_memstore.read().map_err(|e| e.to_string())?;
+    ) -> Result<Vec<CFGResult>> {
+        let current_memstore = self.current_memstore.read().or(Err(QueryError::GetLockError))?;
         Querier::get(&current_memstore, whoami, keys, view_mode, need_explain)
     }
 

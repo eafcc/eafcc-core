@@ -1,0 +1,12 @@
+{
+	"version": 1,
+	"kind": "Rule",
+	"meta": {
+		"desc": "balabalabala",
+		"tags": ["foo", "bar"]
+	},
+	"spec": {
+		"rule": "foo == \"123\" && bar == \"456\""
+	}
+	
+}

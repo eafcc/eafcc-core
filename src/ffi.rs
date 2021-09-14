@@ -4,7 +4,7 @@ use crate::storage_backends::{self, filesystem};
 use serde_json;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, NulError};
 use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 use std::path::PathBuf;
@@ -12,6 +12,9 @@ use std::ptr;
 use std::slice;
 use std::str::FromStr;
 use std::sync::Arc;
+use crate::error::FFIError;
+
+type Result<T> = std::result::Result<T, FFIError>;
 
 type CFGCenter = cfg_center::CFGCenter;
 pub struct WhoAmI(HashMap<String, Value>);
@@ -228,26 +231,26 @@ pub extern "C" fn free_config_values(v: *mut ConfigValues) {
 
 fn build_storage_backend_from_cfg(
     cfg: &serde_json::Value,
-) -> Result<Box<dyn storage_backends::StorageBackend + Send + Sync>, String> {
-    let cfg = cfg.as_object().ok_or("cfg format error")?;
+) -> Result<Box<dyn storage_backends::StorageBackend + Send + Sync>> {
+    let cfg = cfg.as_object().ok_or(FFIError::CreateBackendError("cfg format error"))?;
     let ty = cfg
         .get("type")
-        .ok_or("must have a `type` filed for storage_backend")?
+        .ok_or(FFIError::CreateBackendError("must have a `type` filed for storage_backend"))?
         .as_str()
-        .ok_or("`storage_backend` must be string")?;
+        .ok_or(FFIError::CreateBackendError("`storage_backend` must be string"))?;
 
     match ty {
         "filesystem" => {
             let path = cfg
                 .get("path")
-                .ok_or("filesystem backend must have a `path` filed")?
+                .ok_or(FFIError::CreateBackendError("filesystem backend must have a `path` filed"))?
                 .as_str()
-                .ok_or("`path` must be string")?;
-            let path = PathBuf::from_str(path).or(Err("path invalid"))?;
+                .ok_or(FFIError::CreateBackendError("`path` must be string"))?;
+            let path = PathBuf::from_str(path).or(Err(FFIError::CreateBackendError("path invalid")))?;
             let backend = filesystem::FilesystemBackend::new(path);
             Ok(Box::new(backend))
         }
-        _ => Err("not supported backend type".to_string()),
+        _ => Err(FFIError::CreateBackendError("not supported backend type")),
     }
 }
 
@@ -256,7 +259,7 @@ fn convert_get_cfg_input_value<'a>(
     whoami: *const WhoAmI,
     keys: *mut *mut c_char,
     key_cnt: usize,
-) -> Result<(&'a WhoAmI, Vec<&'a str>), String>{
+) -> Result<(&'a WhoAmI, Vec<&'a str>)>{
     let whoami = unsafe {
         assert!(!whoami.is_null());
         &*whoami
@@ -265,10 +268,7 @@ fn convert_get_cfg_input_value<'a>(
     let key = unsafe {
         let mut ret = Vec::with_capacity(key_cnt);
         for key in slice::from_raw_parts(keys, key_cnt) {
-            match CStr::from_ptr(*key).to_str() {
-                Ok(t) => {ret.push(t)},
-                Err(e) => {return Err(e.to_string())}
-            }
+            ret.push(CStr::from_ptr(*key).to_str()?)
         }
         ret
     };
@@ -280,36 +280,29 @@ fn convert_get_cfg_input_value<'a>(
 #[inline(always)]
 fn convert_get_cfg_output_value(
     values: Vec<CFGResult>,
-) -> Result<*mut ConfigValues, String>{
+) -> Result<*mut ConfigValues>{
     let mut array_ret = Vec::with_capacity(values.len());
     for v in values {
         let reason = match v.reason {
             Some(r) => Box::into_raw(Box::new(ConfigValueReason {
                 pri: r.pri,
                 is_neg: r.is_neg,
-                rule_path: CString::new(&r.rule_path[..]).unwrap().into_raw(),
-                link_path: CString::new(&r.link_path[..]).unwrap().into_raw(),
-                res_path: CString::new(&r.abs_res_path[..]).unwrap().into_raw(),
+                rule_path: CString::new(r.rule_path.as_str())?.into_raw(),
+                link_path: CString::new(r.link_path.as_str())?.into_raw(),
+                res_path: CString::new(r.abs_res_path.as_str())?.into_raw(),
             })),
             None => ptr::null_mut(),
         };
-
+        
         let item = ConfigValue {
-            content_type: CString::new(&v.value.content_type[..]).unwrap().into_raw(),
-            key: CString::new(&v.value.key[..]).unwrap().into_raw(),
-            value: CString::new(&v.value.value[..]).unwrap().into_raw(),
+            content_type: CString::new(&v.value.content_type[..])?.into_raw(),
+            key: CString::new(&v.value.key[..])?.into_raw(),
+            value: CString::new(&v.value.value[..])?.into_raw(),
             reason,
         };
 
         array_ret.push(item);
     }
-
-    array_ret.push(ConfigValue {
-        content_type: ptr::null_mut(),
-        key: ptr::null_mut(),
-        value: ptr::null_mut(),
-        reason:ptr::null_mut(),
-    });
 
     array_ret.shrink_to_fit();
     let mut array_ret = ManuallyDrop::new(array_ret);

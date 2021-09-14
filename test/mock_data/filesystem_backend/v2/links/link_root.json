@@ -1,0 +1,17 @@
+{
+	"version": 1,
+	"kind": "Link",
+	"meta": {
+		"desc": "balabalabala",
+		"tags": ["foo", "bar"]
+	},
+	"spec": {
+		"pri": 3.1415926,
+		"is_neg": false,
+		"ver": "latest:<branch_name>",  
+		"rule": "path:/foo/bar/1.json",  
+		"res":[
+			"path:/foo/bar/1.json" 
+		]
+	}
+}

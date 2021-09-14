@@ -31,9 +31,9 @@ pub struct Link {
 
 impl Link {
     pub fn load_from_slice(link_data: &[u8]) -> Result<Link, DataLoaderError> {
-        let root = serde_json::from_slice::<RootCommon>(link_data).unwrap();
-        let meta = serde_json::from_value::<LinkMeta>(root.meta).unwrap();
-        let spec = serde_json::from_value::<LinkSpec>(root.spec).unwrap();
+        let root = serde_json::from_slice::<RootCommon>(link_data)?;
+        let meta = serde_json::from_value::<LinkMeta>(root.meta)?;
+        let spec = serde_json::from_value::<LinkSpec>(root.spec)?;
         if !spec.pri.is_finite() {
             return Err(DataLoaderError::SpecParseError(
                 "pri field is not a valid float number".to_string(),

@@ -43,9 +43,14 @@ fn test_load_res_and_query() {
 
             let my_key = vec!["my_key", "my_key", "my_key"];
             let t = cc1
-                .get_cfg(&ctx, &my_key, ViewMode::OverlaidView, true)
-                .unwrap();
-            println!("{}", t[0].value.value);
+                .get_cfg(&ctx, &my_key, ViewMode::OverlaidView, true).unwrap();
+            
+            if t.len() > 0 {
+                println!("{}", t[0].value.value);
+            } else {
+                println!("no result");
+            }
+            
             thread::sleep(time::Duration::from_secs(1));
         }
     });

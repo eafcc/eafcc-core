@@ -2,12 +2,14 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::cfg_center::mem_store::MemStorage;
+use crate::error::QueryError;
 use crate::rule_engine;
 
 use super::ViewMode;
 use super::cfgindex::{IdxLinkItem, KeyValuePair};
 pub struct Querier {}
 
+type Result<T> = std::result::Result<T, QueryError>;
 
 pub struct CFGResult {
     pub reason: Option<Arc<IdxLinkItem>>,
@@ -21,7 +23,7 @@ impl Querier {
         keys: &Vec<&str>,
         view_mode: ViewMode,
         need_explain: bool,
-    ) -> Result<Vec<CFGResult>, String> {
+    ) -> Result<Vec<CFGResult>> {
         let mut act_links = Vec::new();
 
         mem_store

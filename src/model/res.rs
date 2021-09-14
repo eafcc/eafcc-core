@@ -30,9 +30,9 @@ pub struct Res {
 
 impl Res {
     pub fn load_from_slice(res_data: &[u8]) -> Result<Res, DataLoaderError> {
-        let root = serde_json::from_slice::<RootCommon>(res_data).unwrap();
-        let meta = serde_json::from_value::<ResMeta>(root.meta).unwrap();
-        let spec = serde_json::from_value::<ResSpec>(root.spec).unwrap();
+        let root = serde_json::from_slice::<RootCommon>(res_data)?;
+        let meta = serde_json::from_value::<ResMeta>(root.meta)?;
+        let spec = serde_json::from_value::<ResSpec>(root.spec)?;
         return Ok(Res { meta, spec });
     }
 }

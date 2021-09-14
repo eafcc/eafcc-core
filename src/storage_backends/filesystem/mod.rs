@@ -1,9 +1,9 @@
-use crate::model::object::{ObjectID, ObjectIDRef};
-use std::{cell::Cell, collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, mpsc::channel}};
+use crate::{error::StorageBackendError, model::object::{ObjectID, ObjectIDRef}};
+use std::{cell::Cell, collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, mpsc::{channel, Receiver}}};
 
 use super::{DirItem, StorageBackend, StorageChangeEvent};
-use notify::{watcher, RecursiveMode, Watcher, DebouncedEvent};
-use std::io::Result;
+use notify::{DebouncedEvent, FsEventWatcher, RecursiveMode, Watcher, watcher};
+use super::Result;
 use std::str;
 use std::thread;
 use std::time::Duration;
@@ -19,15 +19,15 @@ This backend is for develop and testing, Never use this backend in production, b
 */
 
 pub struct FilesystemBackend {
-    hash_2_path: HashMap<ObjectID, PathBuf>,
     base_path: PathBuf,
+    watcher: Mutex<Option<FsEventWatcher>>,
 }
 
 impl FilesystemBackend {
     pub fn new(base_path: PathBuf) -> FilesystemBackend {
         let ret = Self {
-            hash_2_path: HashMap::new(),
             base_path,
+            watcher: Mutex::new(None),
         };
         return ret;
     }
@@ -48,7 +48,7 @@ impl StorageBackend for FilesystemBackend {
             str::from_utf8(hash)
                 .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "invalid path"))?,
         );
-        fs::read(path)
+        Ok(fs::read(path)?)
     }
 
     fn list_dir(&self, version: &str, path: &str) -> Result<Vec<DirItem>> {
@@ -93,10 +93,10 @@ impl StorageBackend for FilesystemBackend {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "not exist or not a file",
-        ));
+        ))?;
     }
 
-    fn set_update_cb(&self, cb: Box<dyn Fn(StorageChangeEvent) + Send + Sync>) {
+    fn set_update_cb(&self, cb: Box<dyn Fn(StorageChangeEvent) + Send + Sync>) -> Result<()> {
 
         let path = self.base_path.join("head");
 
@@ -105,13 +105,30 @@ impl StorageBackend for FilesystemBackend {
                 new_version: new_version.clone(),
             });
         });
+
+        // Create a channel to receive the events.
+        let (tx, rx) = channel();
+
+        // Create a watcher object, delivering debounced events.
+        // The notification back-end is selected based on the platform.
+        let mut watcher = watcher(tx, Duration::from_secs(2)).or(Err(StorageBackendError::UpdateWatchingError("error while setting up update watcher")))?;
+
+        // Add a path to be watched. All files and directories at that path and
+        // below will be monitored for changes.
+        watcher.watch(&path, RecursiveMode::Recursive).or(Err(StorageBackendError::UpdateWatchingError("error while setting up update watcher")))?;
+
+        let path_for_closure = path.clone();
+
+        *(self.watcher.lock().or(Err(StorageBackendError::UpdateWatchingError("error while setting up update watcher")))?) = Some(watcher);
+
         thread::spawn(move || {
             eafcc_watcher(
-                path,
+                rx,
+                path_for_closure,
                 cb_inner,
             )
         });
-        
+        return Ok(())
     }
 
     fn get_diff_list(&self, old_version: &str, new_version: &str, namespace: &str) -> Result<Vec<String>>{
@@ -131,18 +148,7 @@ fn read_version_from_fs(path: &Path) -> Result<String>{
     Ok(String::from_utf8(t).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?)
 }
 
-fn eafcc_watcher(path: PathBuf, cb: Box<dyn Fn(String)>) {
-    // Create a channel to receive the events.
-    let (tx, rx) = channel();
-
-    // Create a watcher object, delivering debounced events.
-    // The notification back-end is selected based on the platform.
-    let mut watcher = watcher(tx, Duration::from_secs(2)).unwrap();
-
-    // Add a path to be watched. All files and directories at that path and
-    // below will be monitored for changes.
-    watcher.watch(&path, RecursiveMode::Recursive).unwrap();
-
+fn eafcc_watcher(rx: Receiver<DebouncedEvent>, path: PathBuf, cb: Box<dyn Fn(String)>) {
     loop {
         match rx.recv() {
             Ok(event) => {
@@ -154,9 +160,10 @@ fn eafcc_watcher(path: PathBuf, cb: Box<dyn Fn(String)>) {
                     },
                     _ => continue,
                 }
-                
             }
-            Err(e) => println!("watch error: {:?}", e),
+            Err(e) => {
+                print_error_with_switch!("watch error: {:?}", e);
+            },
         }
     }
 }
