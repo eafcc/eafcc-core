@@ -1,4 +1,4 @@
-use crate::cfg_center;
+use crate::cfg_center::{self, CFGResult, Differ, NamespaceScopedCFGCenter, UpdateNotifyLevel};
 use crate::rule_engine::Value;
 use crate::storage_backends::{self, filesystem};
 use serde_json;
@@ -11,18 +11,15 @@ use std::path::PathBuf;
 use std::ptr;
 use std::slice;
 use std::str::FromStr;
+use std::sync::Arc;
 
 type CFGCenter = cfg_center::CFGCenter;
-pub struct Context(HashMap<String, Value>);
+pub struct WhoAmI(HashMap<String, Value>);
 
 pub use crate::cfg_center::ViewMode;
 
 #[no_mangle]
-pub extern "C" fn new_config_center_client(
-    cfg: *const c_char,
-    cb: Option<unsafe extern "C" fn(update_info: *const c_void, usre_data: *const c_void)>,
-    user_data: *const c_void,
-) -> *const CFGCenter {
+pub extern "C" fn new_config_center_client(cfg: *const c_char) -> *const CFGCenter {
     let t = unsafe {
         assert!(!cfg.is_null());
         CStr::from_ptr(cfg)
@@ -43,28 +40,66 @@ pub extern "C" fn new_config_center_client(
         Ok(t) => t,
     };
 
-    let mut cc = cfg_center::CFGCenter::new();
-
-    let cc_for_update_cb = cc.clone();
-    if let Some(cb) = cb {
-        let user_data = user_data as usize;
-        let rust_cb = Box::new(move |_| {
-            cc_for_update_cb.full_load_cfg();
-            unsafe { cb(ptr::null(), user_data as *const c_void) }
-        });
-        backend.set_update_cb(rust_cb);
+    if let Ok(cc) = cfg_center::CFGCenter::new(backend) {
+        let ret = Box::new(cc);
+        return Box::into_raw(ret);
+    } else {
+        // TODO set error
+        return ptr::null_mut();
     }
-
-    cc.set_backend(backend);
-    cc.full_load_cfg();
-
-    let ret = Box::new(cc);
-
-    Box::into_raw(ret)
 }
 
 #[no_mangle]
-pub extern "C" fn new_context(val: *const c_char) -> *const Context {
+pub extern "C" fn free_config_center(cc: *mut CFGCenter) {
+    unsafe { Box::from_raw(cc) };
+}
+
+#[no_mangle]
+pub extern "C" fn create_namespace(
+    cc: *const CFGCenter,
+    namespace: *const c_char,
+    notify_level: UpdateNotifyLevel,
+    cb: Option<unsafe extern "C" fn(differ: *const Differ, usre_data: *const c_void)>,
+    user_data: *const c_void,
+) -> *const NamespaceScopedCFGCenter {
+    let cc = unsafe {
+        assert!(!cc.is_null());
+        &*cc
+    };
+
+    let namespace = unsafe {
+        assert!(!namespace.is_null());
+        if let Ok(t) = CStr::from_ptr(namespace).to_str() {
+            t
+        } else {
+            return ptr::null_mut();
+        }
+    };
+
+    // `*const void` is not `Sned`, convert it to a normal number
+    let uintptr = user_data as usize;
+    let callback = if let Some(cb) = cb {
+        Some(Box::new(move |differ: &Differ| unsafe {
+            cb(differ as *const Differ, uintptr as *const c_void);
+        }) as Box<dyn Fn(&Differ) + Send + Sync>)
+    } else {
+        None
+    };
+
+    if let Ok(ns) = cc.create_namespace_scoped_cfg_center(namespace, notify_level, callback) {
+        return Arc::into_raw(ns);
+    } else {
+        return ptr::null_mut();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn free_namespace(ns: *const NamespaceScopedCFGCenter) {
+    unsafe { Arc::from_raw(ns) };
+}
+
+#[no_mangle]
+pub extern "C" fn new_context(val: *const c_char) -> *const WhoAmI {
     let mut ret = HashMap::new();
     let val = unsafe { CStr::from_ptr(val).to_string_lossy() };
     for part in val.split("\n") {
@@ -72,13 +107,12 @@ pub extern "C" fn new_context(val: *const c_char) -> *const Context {
             ret.insert(k.trim().to_owned(), Value::Str(v.trim().to_owned()));
         }
     }
-    let t = Box::into_raw(Box::new(Context(ret)));
-    // println!(">>{:?}", t);
+    let t = Box::into_raw(Box::new(WhoAmI(ret)));
     t
 }
 
 #[no_mangle]
-pub extern "C" fn free_context(ctx: *mut Context) {
+pub extern "C" fn free_context(ctx: *mut WhoAmI) {
     unsafe { Box::from_raw(ctx) };
 }
 
@@ -122,75 +156,52 @@ impl Drop for ConfigValue {
     }
 }
 
-#[repr(C)]
-pub struct UpdateInfo {
-    pub event_cnt: u64,
-    pub events: *const UpdateInfoItem,
-}
+// #[repr(C)]
+// pub struct UpdateInfo {
+//     pub event_cnt: u64,
+//     pub events: *const UpdateInfoItem,
+// }
 
-pub struct UpdateInfoItem {
-    pub event_type: UpdateInfoEventType,
-    pub key: *mut char,
-}
+// pub struct UpdateInfoItem {
+//     pub event_type: UpdateInfoEventType,
+//     pub key: *mut char,
+// }
 
 #[no_mangle]
 pub extern "C" fn get_config(
-    cc: *const CFGCenter,
-    ctx: *const Context,
+    ns: *const NamespaceScopedCFGCenter,
+    whoami: *const WhoAmI,
     keys: *mut *mut c_char,
     key_cnt: usize,
     view_mode: ViewMode,
     need_explain: u8,
 ) -> *mut ConfigValue {
-    let cc = unsafe { &*cc };
-
-    let ctx = unsafe { &*ctx };
-
-    let key = unsafe {
-        let mut ret = Vec::with_capacity(key_cnt);
-        for key in slice::from_raw_parts(keys, key_cnt) {
-            if let Ok(t) = CStr::from_ptr(*key).to_str() {
-                ret.push(t);
-            } else {
-                return ptr::null_mut();
-            }
-        }
-        ret
+    let ns = unsafe {
+        assert!(!ns.is_null());
+        &*ns
     };
 
-    let cc_ref = cc.clone();
-    let vs = cc_ref
-        .get_cfg(&ctx.0, &key, view_mode, if need_explain==0 {false} else {true})
-        .unwrap();
 
-    let mut ret = Vec::with_capacity(key_cnt);
-    for v in vs {
+    let (whoami, keys) = match convert_get_cfg_input_value(whoami, keys, key_cnt) {
+        Ok((whoami, keys)) => (whoami, keys),
+        Err(_ ) => {return ptr::null_mut()},
+    };
 
-        let reason = match v.reason {
-            Some(r) => Box::into_raw(Box::new(ConfigValueReason{
-                pri: r.link.pri,
-                is_neg: r.link.is_neg,
-                rule_path: CString::new(&r.link.rule_path[..]).unwrap().into_raw(),
-                link_path: CString::new(&r.link.link_path[..]).unwrap().into_raw(),
-                res_path: CString::new(&(*r.res_path)[..]).unwrap().into_raw(),
-            })),
-            None => ptr::null_mut(),
-        };
+    let values = match ns
+            .get_cfg(
+                &whoami.0,
+                &keys,
+                view_mode,
+                if need_explain == 0 { false } else { true },
+            ){
+                Ok(values) => values,
+                Err(_) => {return ptr::null_mut()},
+            };
 
-        let item = ConfigValue {
-            content_type: CString::new(&v.value.content_type[..]).unwrap().into_raw(),
-            key: CString::new(&v.value.key[..]).unwrap().into_raw(),
-            value: CString::new(&v.value.value[..]).unwrap().into_raw(),
-            reason
-        };
-
-        ret.push(item);
+    match convert_get_cfg_output_value(values) {
+        Ok(p) => return p,
+        Err(_) => return ptr::null_mut(),
     }
-
-    ret.shrink_to_fit();
-    let mut ret = ManuallyDrop::new(ret);
-    let t = ret.as_mut_ptr();
-    return t;
 }
 
 #[no_mangle]
@@ -220,5 +231,143 @@ fn build_storage_backend_from_cfg(
             Ok(Box::new(backend))
         }
         _ => Err("not supported backend type".to_string()),
+    }
+}
+
+#[inline(always)]
+fn convert_get_cfg_input_value<'a>(
+    whoami: *const WhoAmI,
+    keys: *mut *mut c_char,
+    key_cnt: usize,
+) -> Result<(&'a WhoAmI, Vec<&'a str>), String>{
+    let whoami = unsafe {
+        assert!(!whoami.is_null());
+        &*whoami
+    };
+
+    let key = unsafe {
+        let mut ret = Vec::with_capacity(key_cnt);
+        for key in slice::from_raw_parts(keys, key_cnt) {
+            match CStr::from_ptr(*key).to_str() {
+                Ok(t) => {ret.push(t)},
+                Err(e) => {return Err(e.to_string())}
+            }
+        }
+        ret
+    };
+
+    return Ok((whoami, key))
+}
+
+
+#[inline(always)]
+fn convert_get_cfg_output_value(
+    values: Vec<CFGResult>,
+) -> Result<*mut ConfigValue, String>{
+    let mut ret = Vec::with_capacity(values.len());
+    for v in values {
+        let reason = match v.reason {
+            Some(r) => Box::into_raw(Box::new(ConfigValueReason {
+                pri: r.pri,
+                is_neg: r.is_neg,
+                rule_path: CString::new(&r.rule_path[..]).unwrap().into_raw(),
+                link_path: CString::new(&r.link_path[..]).unwrap().into_raw(),
+                res_path: CString::new(&r.abs_res_path[..]).unwrap().into_raw(),
+            })),
+            None => ptr::null_mut(),
+        };
+
+        let item = ConfigValue {
+            content_type: CString::new(&v.value.content_type[..]).unwrap().into_raw(),
+            key: CString::new(&v.value.key[..]).unwrap().into_raw(),
+            value: CString::new(&v.value.value[..]).unwrap().into_raw(),
+            reason,
+        };
+
+        ret.push(item);
+    }
+
+    ret.shrink_to_fit();
+    let mut ret = ManuallyDrop::new(ret);
+    let t = ret.as_mut_ptr();
+    return Ok(t);
+}
+
+
+// #[no_mangle]
+// pub extern "C" fn differ_get_from_old(v: *mut ConfigValue, n: usize) {
+//     unsafe { Vec::from_raw_parts(v, n, n) };
+// }
+
+
+#[no_mangle]
+pub extern "C" fn differ_get_from_old(
+    differ: *const Differ,
+    whoami: *const WhoAmI,
+    keys: *mut *mut c_char,
+    key_cnt: usize,
+    view_mode: ViewMode,
+    need_explain: u8,
+) -> *mut ConfigValue {
+    let differ = unsafe {
+        assert!(!differ.is_null());
+        &*differ
+    };
+
+    let (whoami, keys) = match convert_get_cfg_input_value(whoami, keys, key_cnt) {
+        Ok((whoami, keys)) => (whoami, keys),
+        Err(_ ) => {return ptr::null_mut()},
+    };
+
+    let values = match differ
+            .get_from_old(
+                &whoami.0,
+                &keys,
+                view_mode,
+                if need_explain == 0 { false } else { true },
+            ){
+                Ok(values) => values,
+                Err(_) => {return ptr::null_mut()},
+            };
+
+    match convert_get_cfg_output_value(values) {
+        Ok(p) => return p,
+        Err(_) => return ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn differ_get_from_new(
+    differ: *const Differ,
+    whoami: *const WhoAmI,
+    keys: *mut *mut c_char,
+    key_cnt: usize,
+    view_mode: ViewMode,
+    need_explain: u8,
+) -> *mut ConfigValue {
+    let differ = unsafe {
+        assert!(!differ.is_null());
+        &*differ
+    };
+
+    let (whoami, keys) = match convert_get_cfg_input_value(whoami, keys, key_cnt) {
+        Ok((whoami, keys)) => (whoami, keys),
+        Err(_ ) => {return ptr::null_mut()},
+    };
+
+    let values = match differ
+            .get_from_new(
+                &whoami.0,
+                &keys,
+                view_mode,
+                if need_explain == 0 { false } else { true },
+            ){
+                Ok(values) => values,
+                Err(_) => {return ptr::null_mut()},
+            };
+
+    match convert_get_cfg_output_value(values) {
+        Ok(p) => return p,
+        Err(_) => return ptr::null_mut(),
     }
 }

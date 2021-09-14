@@ -3,6 +3,7 @@ mod cfgindex;
 mod mem_store;
 mod querier;
 mod cfg_center;
+mod differ;
 
 use core::time;
 use std::collections::{HashMap, HashSet};
@@ -10,14 +11,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread;
 
-use crate::cfg_center::cfg_center::{CFGCenter, ViewMode};
-use crate::model::object::ObjectID;
 use crate::rule_engine::Value;
 use crate::storage_backends::{filesystem, StorageBackend};
 
-
-
-
+pub use crate::cfg_center::cfg_center::{CFGCenter, ViewMode};
+pub use crate::cfg_center::differ::Differ;
+pub use crate::cfg_center::namespace::NamespaceScopedCFGCenter;
+pub use cfg_center::UpdateNotifyLevel;
+pub use querier::CFGResult;
 
 #[test]
 fn test_load_res_and_query() {
@@ -29,7 +30,7 @@ fn test_load_res_and_query() {
     let mut backend = Box::new(filesystem::FilesystemBackend::new(base_path));
     let mut cc = CFGCenter::new(backend).unwrap();
     
-    let cfg_ns = cc.create_namespace_scoped_cfg_center("/", cfg_center::UpdateNotifyLevel::NotifyWithoutChangedKeysByGlobal, Some(Box::new(|_,_|{}))).unwrap();
+    let cfg_ns = cc.create_namespace_scoped_cfg_center("/", UpdateNotifyLevel::NotifyWithoutChangedKeysByGlobal, Some(Box::new(|_|{}))).unwrap();
 
     let cc1 = cfg_ns.clone();
     let cc2 = cfg_ns.clone();

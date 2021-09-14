@@ -7,6 +7,7 @@ use std::thread;
 use crate::storage_backends::{filesystem, StorageBackend, StorageChangeEvent};
 use crate::{rule_engine::Value, storage_backends};
 
+use super::differ::Differ;
 use super::mem_store::MemStorage;
 use super::namespace::{NamespaceScopedCFGCenter, UpdateEventItem};
 use super::querier::CFGResult;
@@ -54,7 +55,7 @@ impl CFGCenterInner {
         &self,
         namespace: &str,
         notify_level: UpdateNotifyLevel,
-		callback: Option<Box<dyn Fn(UpdateNotifyLevel, Vec<UpdateEventItem>)+ Send + Sync>>,
+		callback: Option<Box<dyn Fn(&Differ)+ Send + Sync>>,
     ) -> Result<Arc<NamespaceScopedCFGCenter>, String> {
         if !namespace.starts_with("/") || !namespace.ends_with("/") {
             return Err("namespace must starts and end with `/`".to_owned());
@@ -67,6 +68,7 @@ impl CFGCenterInner {
         let v = Arc::new(NamespaceScopedCFGCenter::new(
             namespace,
             mem_store,
+			self.backend.clone(),
             notify_level,
 			callback,
         ));
@@ -167,7 +169,7 @@ impl CFGCenter {
         &self,
         namespace: &str,
         notify_level: UpdateNotifyLevel,
-		callback: Option<Box<dyn Fn(UpdateNotifyLevel, Vec<UpdateEventItem>) + Send + Sync>>,
+		callback: Option<Box<dyn Fn(&Differ) + Send + Sync>>,
     ) -> Result<Arc<NamespaceScopedCFGCenter>, String> {
         return self
             .0

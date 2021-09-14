@@ -27,22 +27,26 @@ import (
 // typedef void (*eafcc_update_cb_fn)(void*, void*);
 import "C"
 
-type UpdateInfo struct{
-
+type Differ struct{
+	ptr unsafe.Pointer
 }
 
 type CFGCenter struct {
 	sync.RWMutex
 	cc unsafe.Pointer
-	// cache    map[string]*CFGValue
+}
+
+type Namespace struct {
+	sync.RWMutex
+	cc unsafe.Pointer
 	cache      *lru.Cache
 	cacheSize  int
 	hashSalt   []byte
-	updateCB   func(*UpdateInfo)
+	updateCB   func(Differ)
 	hasherPool *sync.Pool
 }
 
-type CFGContext struct {
+type WhoAmI struct {
 	ctx  unsafe.Pointer
 	raw  string
 	hash []byte
@@ -63,9 +67,9 @@ type CFGValueReason struct {
 	ResPath string
 }
 
-type eafccInstanceStorageForCGo struct {
+type namespaceInstanceStorageForCGo struct {
 	sync.RWMutex
-	store map[unsafe.Pointer]*CFGCenter
+	store map[unsafe.Pointer]*Namespace
 	idGen uint64
 }
 
@@ -76,44 +80,68 @@ const (
 	CFGViewModeAllLinkedResView CFGViewMode = 1
 )
 
-func (s *eafccInstanceStorageForCGo) GetNewID() uint64 {
+type NotifyLevel uint32 
+
+const (
+	NotifyLevelNoNotify = 0
+	NotifyLevelNotifyWithoutChangedKeysByGlobal = 1
+	NotifyLevelNotifyWithoutChangedKeysInNamespace = 2
+	NotifyLevelNotifyWithMaybeChangedKeys = 3
+)
+
+func (s *namespaceInstanceStorageForCGo) GetNewID() uint64 {
 	return atomic.AddUint64(&s.idGen, 1)
 }
 
-func (s *eafccInstanceStorageForCGo) Put(p unsafe.Pointer, c *CFGCenter) {
+func (s *namespaceInstanceStorageForCGo) Put(p unsafe.Pointer, c *Namespace) {
 	s.Lock()
 	defer s.Unlock()
 	s.store[p] = c
 }
 
-func (s *eafccInstanceStorageForCGo) Get(p unsafe.Pointer) *CFGCenter {
+func (s *namespaceInstanceStorageForCGo) Get(p unsafe.Pointer) *Namespace {
 	s.RLock()
 	defer s.RUnlock()
 	return s.store[p]
 }
 
-var eafccInstanceStorageForCGoInst = eafccInstanceStorageForCGo{store: make(map[unsafe.Pointer]*CFGCenter)}
+var namespaceInstanceStorageForCGoInst = namespaceInstanceStorageForCGo{store: make(map[unsafe.Pointer]*Namespace)}
 
 // be careful, there must not have a space between `//`` and `export`
 //export update_cb_go
-func update_cb_go(updateInfo unsafe.Pointer, userData unsafe.Pointer) {
-	if cc := eafccInstanceStorageForCGoInst.Get(userData); cc != nil {
+func update_cb_go(differ unsafe.Pointer, userData unsafe.Pointer) {
+	if cc := namespaceInstanceStorageForCGoInst.Get(userData); cc != nil {
 		newCache := lru.New(cc.cacheSize)
 		cc.Lock()
 		defer cc.Unlock()
 		cc.cache = newCache
 		if cc.updateCB != nil {
-			cc.updateCB(nil)
+			cc.updateCB(Differ{ptr:differ})
 		}
 
 	}
 }
 
-func NewCfgCenter(cfg string, updateCB func(*UpdateInfo), cacheSize int, cacheSalt []byte) *CFGCenter {
+func NewCfgCenter(cfg string) *CFGCenter {
 	ccfg := C.CString(cfg)
 	defer C.free(unsafe.Pointer(ccfg))
 
-	ret := CFGCenter{
+	ret := CFGCenter{}
+
+	if handler := C.new_config_center_client(
+		ccfg,
+	); handler != nil {
+		ret.cc = unsafe.Pointer(handler)
+		return &ret
+	}
+	return nil
+}
+
+func (cc *CFGCenter) CreateNamespace(namespace string, notifyLevel NotifyLevel, updateCB func(Differ), cacheSize int, cacheSalt []byte) *Namespace {
+	cnamespace := C.CString(namespace)
+	defer C.free(unsafe.Pointer(cnamespace))
+
+	ret := Namespace{
 		cache:     lru.New(cacheSize),
 		hashSalt:  cacheSalt,
 		cacheSize: cacheSize,
@@ -130,21 +158,23 @@ func NewCfgCenter(cfg string, updateCB func(*UpdateInfo), cacheSize int, cacheSa
 		rand.Read(ret.hashSalt)
 	}
 
-	punsafe := unsafe.Pointer(uintptr(eafccInstanceStorageForCGoInst.GetNewID()))
-	if handler := C.new_config_center_client(
-		ccfg,
+	userdata := unsafe.Pointer(uintptr(namespaceInstanceStorageForCGoInst.GetNewID()))
+	if handler := C.create_namespace(
+		(*C.eafcc_CFGCenter)(cc.cc),
+		cnamespace,
+		C.eafcc_UpdateNotifyLevel(notifyLevel),
 		(C.eafcc_update_cb_fn)(unsafe.Pointer(C.update_cb_go)),
-		punsafe,
+		userdata,
 	); handler != nil {
 		ret.cc = unsafe.Pointer(handler)
 
-		eafccInstanceStorageForCGoInst.Put(punsafe, &ret)
+		namespaceInstanceStorageForCGoInst.Put(userdata, &ret)
 		return &ret
 	}
 	return nil
 }
 
-func (c *CFGCenter) batchReadFromCache(ccCtx *CFGContext, keys []string, viewMode CFGViewMode, needExplain bool) (values map[string][]*CFGValue, missingKeys []string, missingCacheKeysMap map[string]string) {
+func (c *Namespace) batchReadFromCache(ccCtx *WhoAmI, keys []string, viewMode CFGViewMode, needExplain bool) (values map[string][]*CFGValue, missingKeys []string, missingCacheKeysMap map[string]string) {
 	values = make(map[string][]*CFGValue, len(keys))
 	for _, key := range keys {
 		cacheKey := string(makeCacheKey(c.hasherPool, ccCtx, key, viewMode, needExplain))
@@ -162,7 +192,7 @@ func (c *CFGCenter) batchReadFromCache(ccCtx *CFGContext, keys []string, viewMod
 	return values, missingKeys, missingCacheKeysMap
 }
 
-func (c *CFGCenter) GetCfg(ccCtx *CFGContext, keys []string, viewMode CFGViewMode, needExplain bool) map[string][]*CFGValue {
+func (c *Namespace) GetCfg(ccCtx *WhoAmI, keys []string, viewMode CFGViewMode, needExplain bool) map[string][]*CFGValue {
 
 	c.RWMutex.RLock()
 	values, missingKeys, missingCacheKeysMap := c.batchReadFromCache(ccCtx, keys, viewMode, needExplain)
@@ -188,7 +218,7 @@ func (c *CFGCenter) GetCfg(ccCtx *CFGContext, keys []string, viewMode CFGViewMod
 	return values
 }
 
-func makeCacheKey(pool *sync.Pool, ccCtx *CFGContext, key string, viewMode CFGViewMode, needExplain bool) []byte {
+func makeCacheKey(pool *sync.Pool, ccCtx *WhoAmI, key string, viewMode CFGViewMode, needExplain bool) []byte {
 	hasher := pool.Get().(hash.Hash)
 	hasher.Write(ccCtx.hash)
 	hasher.Write([]byte{'|'})
@@ -207,7 +237,7 @@ func makeCacheKey(pool *sync.Pool, ccCtx *CFGContext, key string, viewMode CFGVi
 	return t
 }
 
-func (c *CFGCenter) GetCfgRawNoCache(ccCtx *CFGContext, keys []string, viewMode CFGViewMode, needExplain bool) map[string][]*CFGValue {
+func (c *Namespace) GetCfgRawNoCache(ccCtx *WhoAmI, keys []string, viewMode CFGViewMode, needExplain bool) map[string][]*CFGValue {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -235,7 +265,7 @@ func (c *CFGCenter) GetCfgRawNoCache(ccCtx *CFGContext, keys []string, viewMode 
 		_needExplain = 1
 	}
 
-	t := C.get_config((*C.eafcc_CFGCenter)(c.cc), (*C.eafcc_Context)(ccCtx.ctx), (**C.char)(unsafe.Pointer(&ckeys[0])), C.ulong(len(keys)), cViewMode, C.uchar(_needExplain))
+	t := C.get_config((*C.eafcc_NamespaceScopedCFGCenter)(c.cc), (*C.eafcc_WhoAmI)(ccCtx.ctx), (**C.char)(unsafe.Pointer(&ckeys[0])), C.ulong(len(keys)), cViewMode, C.uchar(_needExplain))
 
 	ret := make(map[string][]*CFGValue, len(keys))
 
@@ -264,26 +294,29 @@ func (c *CFGCenter) GetCfgRawNoCache(ccCtx *CFGContext, keys []string, viewMode 
 	return ret
 }
 
-func (c *CFGCenter) NewContext(ccCtx string) *CFGContext {
+func (c *Namespace) NewWhoAmI(whoAmI string) *WhoAmI {
 
 	hasher := c.hasherPool.Get().(hash.Hash)
 	hasher.Write(c.hashSalt)
-	hasher.Write(toBytes(ccCtx))
+	hasher.Write(toBytes(whoAmI))
 	hashVal := hasher.Sum(nil)
 	hasher.Reset()
 	c.hasherPool.Put(hasher)
-	ret := &CFGContext{hash: hashVal, raw: ccCtx}
+	ret := &WhoAmI{hash: hashVal, raw: whoAmI}
 
 	// wo don't need to call into C library now, we want to check cache first
 	return ret
 }
 
-func (c *CFGContext) Free() {
+func (c *WhoAmI) Free() {
 	if c.ctx != nil {
-		C.free_context((*C.eafcc_Context)(c.ctx))
+		C.free_context((*C.eafcc_WhoAmI)(c.ctx))
 	}
 
 }
+
+
+func (d *Differ) GetFromOld(){}
 
 func toString(bytes []byte) string {
 	hdr := *(*reflect.SliceHeader)(unsafe.Pointer(&bytes))
@@ -314,18 +347,19 @@ func test_raw_get() {
 			"type": "filesystem",
 			"path": "../../test/mock_data/filesystem_backend/"
 		}
-	}`, nil, 1024*1024*1024, nil)
+	}`)
 
+	ns := cc.CreateNamespace("/", NotifyLevelNotifyWithoutChangedKeysByGlobal, nil, 1024*1024*1024, nil)
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	for i := 0; i < 2; i++ {
 		go func() {
 			defer wg.Done()
 
-			for x := 0; x < 6000000; x++ {
-				ctx := cc.NewContext("foo=123\nbar=456")
+			for x := 0; x < 60000; x++ {
+				ctx := ns.NewWhoAmI("foo=123\nbar=456")
 
-				values := cc.GetCfgRawNoCache(ctx, []string{"my_key", "my_key", "my_key"}, CFGViewModeOverlaidView, false)
+				values := ns.GetCfgRawNoCache(ctx, []string{"my_key", "my_key", "my_key"}, CFGViewModeOverlaidView, false)
 				ctx.Free()
 
 				contextType, value := values["my_key"][0].ContextType, values["my_key"][0].Value
@@ -358,8 +392,8 @@ func test_cache_get() {
 			"type": "filesystem",
 			"path": "../../test/mock_data/filesystem_backend/"
 		}
-	}`, nil, 1024*1024*1024, nil)
-
+	}`)
+	ns := cc.CreateNamespace("/", NotifyLevelNotifyWithoutChangedKeysByGlobal, nil, 1024*1024*1024, nil)
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 	for i := 0; i < 2; i++ {
@@ -367,9 +401,9 @@ func test_cache_get() {
 			defer wg.Done()
 
 			for x := 0; x < 60000000; x++ {
-				ctx := cc.NewContext("foo=123\nbar=456")
+				ctx := ns.NewWhoAmI("foo=123\nbar=456")
 
-				values := cc.GetCfg(ctx, []string{"my_key", "my_key", "my_key"}, CFGViewModeOverlaidView, false)
+				values := ns.GetCfg(ctx, []string{"my_key", "my_key", "my_key"}, CFGViewModeOverlaidView, false)
 				ctx.Free()
 
 				contextType, value := values["my_key"][0].ContextType, values["my_key"][0].Value
@@ -390,6 +424,6 @@ func test_cache_get() {
 }
 
 func main() {
-	// test_raw_get()
-	test_cache_get()
+	test_raw_get()
+	// test_cache_get()
 }
