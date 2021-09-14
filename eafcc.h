@@ -35,6 +35,11 @@ typedef struct {
   eafcc_ConfigValueReason *reason;
 } eafcc_ConfigValue;
 
+typedef struct {
+  uintptr_t len;
+  eafcc_ConfigValue *ptr;
+} eafcc_ConfigValues;
+
 const eafcc_CFGCenter *new_config_center_client(const char *cfg);
 
 void free_config_center(eafcc_CFGCenter *cc);
@@ -47,29 +52,29 @@ const eafcc_NamespaceScopedCFGCenter *create_namespace(const eafcc_CFGCenter *cc
 
 void free_namespace(const eafcc_NamespaceScopedCFGCenter *ns);
 
-const eafcc_WhoAmI *new_context(const char *val);
+const eafcc_WhoAmI *new_whoami(const char *val);
 
 void free_context(eafcc_WhoAmI *ctx);
 
-eafcc_ConfigValue *get_config(const eafcc_NamespaceScopedCFGCenter *ns,
-                              const eafcc_WhoAmI *whoami,
-                              char **keys,
-                              uintptr_t key_cnt,
-                              eafcc_ViewMode view_mode,
-                              uint8_t need_explain);
+eafcc_ConfigValues *get_config(const eafcc_NamespaceScopedCFGCenter *ns,
+                               const eafcc_WhoAmI *whoami,
+                               char **keys,
+                               uintptr_t key_cnt,
+                               eafcc_ViewMode view_mode,
+                               uint8_t need_explain);
 
-void free_config_value(eafcc_ConfigValue *v, uintptr_t n);
+void free_config_values(eafcc_ConfigValues *v);
 
-eafcc_ConfigValue *differ_get_from_old(const eafcc_Differ *differ,
-                                       const eafcc_WhoAmI *whoami,
-                                       char **keys,
-                                       uintptr_t key_cnt,
-                                       eafcc_ViewMode view_mode,
-                                       uint8_t need_explain);
+eafcc_ConfigValues *differ_get_from_old(const eafcc_Differ *differ,
+                                        const eafcc_WhoAmI *whoami,
+                                        char **keys,
+                                        uintptr_t key_cnt,
+                                        eafcc_ViewMode view_mode,
+                                        uint8_t need_explain);
 
-eafcc_ConfigValue *differ_get_from_new(const eafcc_Differ *differ,
-                                       const eafcc_WhoAmI *whoami,
-                                       char **keys,
-                                       uintptr_t key_cnt,
-                                       eafcc_ViewMode view_mode,
-                                       uint8_t need_explain);
+eafcc_ConfigValues *differ_get_from_new(const eafcc_Differ *differ,
+                                        const eafcc_WhoAmI *whoami,
+                                        char **keys,
+                                        uintptr_t key_cnt,
+                                        eafcc_ViewMode view_mode,
+                                        uint8_t need_explain);

@@ -174,10 +174,10 @@ func (cc *CFGCenter) CreateNamespace(namespace string, notifyLevel NotifyLevel, 
 	return nil
 }
 
-func (c *Namespace) batchReadFromCache(ccCtx *WhoAmI, keys []string, viewMode CFGViewMode, needExplain bool) (values map[string][]*CFGValue, missingKeys []string, missingCacheKeysMap map[string]string) {
+func (c *Namespace) batchReadFromCache(whoami *WhoAmI, keys []string, viewMode CFGViewMode, needExplain bool) (values map[string][]*CFGValue, missingKeys []string, missingCacheKeysMap map[string]string) {
 	values = make(map[string][]*CFGValue, len(keys))
 	for _, key := range keys {
-		cacheKey := string(makeCacheKey(c.hasherPool, ccCtx, key, viewMode, needExplain))
+		cacheKey := string(makeCacheKey(c.hasherPool, whoami, key, viewMode, needExplain))
 		if v, ok := c.cache.Get(cacheKey); ok {
 			values[key] = v.([]*CFGValue)
 		} else {
@@ -192,17 +192,17 @@ func (c *Namespace) batchReadFromCache(ccCtx *WhoAmI, keys []string, viewMode CF
 	return values, missingKeys, missingCacheKeysMap
 }
 
-func (c *Namespace) GetCfg(ccCtx *WhoAmI, keys []string, viewMode CFGViewMode, needExplain bool) map[string][]*CFGValue {
+func (c *Namespace) GetCfg(whoami *WhoAmI, keys []string, viewMode CFGViewMode, needExplain bool) map[string][]*CFGValue {
 
 	c.RWMutex.RLock()
-	values, missingKeys, missingCacheKeysMap := c.batchReadFromCache(ccCtx, keys, viewMode, needExplain)
+	values, missingKeys, missingCacheKeysMap := c.batchReadFromCache(whoami, keys, viewMode, needExplain)
 	c.RWMutex.RUnlock()
 
 	if missingKeys == nil {
 		return values
 	}
 
-	t := c.GetCfgRawNoCache(ccCtx, missingKeys, viewMode, needExplain)
+	t := c.GetCfgRawNoCache(whoami, missingKeys, viewMode, needExplain)
 
 	c.RWMutex.Lock()
 	for key, value := range t {
@@ -212,15 +212,15 @@ func (c *Namespace) GetCfg(ccCtx *WhoAmI, keys []string, viewMode CFGViewMode, n
 
 	// reload the full key list in case of update callback, we have to ensure that the returned value is from the same config version
 	c.RWMutex.RLock()
-	values, missingKeys, missingCacheKeysMap = c.batchReadFromCache(ccCtx, keys, viewMode, needExplain)
+	values, missingKeys, missingCacheKeysMap = c.batchReadFromCache(whoami, keys, viewMode, needExplain)
 	c.RWMutex.RUnlock()
 
 	return values
 }
 
-func makeCacheKey(pool *sync.Pool, ccCtx *WhoAmI, key string, viewMode CFGViewMode, needExplain bool) []byte {
+func makeCacheKey(pool *sync.Pool, whoami *WhoAmI, key string, viewMode CFGViewMode, needExplain bool) []byte {
 	hasher := pool.Get().(hash.Hash)
-	hasher.Write(ccCtx.hash)
+	hasher.Write(whoami.hash)
 	hasher.Write([]byte{'|'})
 	hasher.Write(toBytes(key))
 	hasher.Write([]byte{'|'})
@@ -237,7 +237,7 @@ func makeCacheKey(pool *sync.Pool, ccCtx *WhoAmI, key string, viewMode CFGViewMo
 	return t
 }
 
-func (c *Namespace) GetCfgRawNoCache(ccCtx *WhoAmI, keys []string, viewMode CFGViewMode, needExplain bool) map[string][]*CFGValue {
+func (c *Namespace) GetCfgRawNoCache(whoami *WhoAmI, keys []string, viewMode CFGViewMode, needExplain bool) map[string][]*CFGValue {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -249,11 +249,11 @@ func (c *Namespace) GetCfgRawNoCache(ccCtx *WhoAmI, keys []string, viewMode CFGV
 		defer C.free(unsafe.Pointer(ckey))
 	}
 
-	if ccCtx.ctx == nil {
-		cctx := C.CString(ccCtx.raw)
+	if whoami.ctx == nil {
+		cctx := C.CString(whoami.raw)
 		defer C.free(unsafe.Pointer(cctx))
-		if handler := C.new_context(cctx); handler != nil {
-			ccCtx.ctx = unsafe.Pointer(handler)
+		if handler := C.new_whoami(cctx); handler != nil {
+			whoami.ctx = unsafe.Pointer(handler)
 		} else {
 			return nil
 		}
@@ -265,7 +265,7 @@ func (c *Namespace) GetCfgRawNoCache(ccCtx *WhoAmI, keys []string, viewMode CFGV
 		_needExplain = 1
 	}
 
-	t := C.get_config((*C.eafcc_NamespaceScopedCFGCenter)(c.cc), (*C.eafcc_WhoAmI)(ccCtx.ctx), (**C.char)(unsafe.Pointer(&ckeys[0])), C.ulong(len(keys)), cViewMode, C.uchar(_needExplain))
+	t := C.get_config((*C.eafcc_NamespaceScopedCFGCenter)(c.cc), (*C.eafcc_WhoAmI)(whoami.ctx), (**C.char)(unsafe.Pointer(&ckeys[0])), C.ulong(len(keys)), cViewMode, C.uchar(_needExplain))
 
 	ret := make(map[string][]*CFGValue, len(keys))
 
@@ -290,7 +290,7 @@ func (c *Namespace) GetCfgRawNoCache(ccCtx *WhoAmI, keys []string, viewMode CFGV
 
 		ret[key] = append(ret[key], &CFGValue{key, contextType, value, reason})
 	}
-	C.free_config_value(t, C.ulong(len(keys)))
+	C.free_config_values(t)
 	return ret
 }
 
@@ -316,7 +316,74 @@ func (c *WhoAmI) Free() {
 }
 
 
-func (d *Differ) GetFromOld(){}
+
+func convertGetCFGInput(whoami *WhoAmI, keys []string, viewMode CFGViewMode, needExplain bool) (ckeys []unsafe.Pointer, cViewMode C.eafcc_ViewMode, cNeedExplain uint8, err error) {
+	if len(keys) == 0 {
+		return nil, 0, 0,fmt.Errorf("no input keys")
+	}
+
+	ckeys = make([]unsafe.Pointer, 0, len(keys))
+	for _, key := range keys {
+		ckey := C.CString(key)
+		ckeys = append(ckeys, unsafe.Pointer(ckey))
+		// defer C.free(unsafe.Pointer(ckey))
+	}
+
+	if whoami.ctx == nil {
+		cctx := C.CString(whoami.raw)
+		defer C.free(unsafe.Pointer(cctx))
+		if handler := C.new_whoami(cctx); handler != nil {
+			whoami.ctx = unsafe.Pointer(handler)
+		} else {
+			return nil, 0, 0, fmt.Errorf("create whoami in C library got error")
+		}
+	}
+ 
+	cViewMode = C.eafcc_ViewMode(viewMode)
+	cNeedExplain = 0
+	if needExplain {
+		cNeedExplain = 1
+	}
+	return
+}
+
+func convertGetCFGOutput(cValues *C.eafcc_ConfigValues) map[string][]*CFGValue {
+
+	valueCnt := int(cValues.len)
+	t := cValues.ptr
+
+	ret := make(map[string][]*CFGValue, valueCnt)
+
+	for i := 0; i < valueCnt; i++ {
+		tmpP := unsafe.Pointer(uintptr(unsafe.Pointer(t)) + uintptr(i)*unsafe.Sizeof(C.eafcc_ConfigValue{}))
+		t := (*C.eafcc_ConfigValue)(tmpP)
+		key := C.GoString(t.key)
+		contextType := C.GoString(t.content_type)
+		value := C.GoString(t.value)
+
+		var reason *CFGValueReason = nil
+		if t.reason != nil {
+			r := (*C.eafcc_ConfigValueReason)(t.reason)
+			reason = &CFGValueReason{
+				Pri: float32(r.pri),
+				IsNeg: bool(r.is_neg),
+				RulePath: C.GoString(r.rule_path),
+				LinkPath: C.GoString(r.link_path),
+				ResPath: C.GoString(r.res_path),
+			}
+		}
+
+		ret[key] = append(ret[key], &CFGValue{key, contextType, value, reason})
+	}
+	C.free_config_values(cValues)
+	return ret
+}
+
+
+
+func (d *Differ) GetFromOld(whoami *WhoAmI, keys []string, viewMode CFGViewMode, needExplain bool) map[string][]*CFGValue{
+
+}
 
 func toString(bytes []byte) string {
 	hdr := *(*reflect.SliceHeader)(unsafe.Pointer(&bytes))

@@ -99,7 +99,7 @@ pub extern "C" fn free_namespace(ns: *const NamespaceScopedCFGCenter) {
 }
 
 #[no_mangle]
-pub extern "C" fn new_context(val: *const c_char) -> *const WhoAmI {
+pub extern "C" fn new_whoami(val: *const c_char) -> *const WhoAmI {
     let mut ret = HashMap::new();
     let val = unsafe { CStr::from_ptr(val).to_string_lossy() };
     for part in val.split("\n") {
@@ -131,6 +131,23 @@ impl Drop for ConfigValueReason {
             CString::from_raw(self.link_path);
             CString::from_raw(self.rule_path);
             CString::from_raw(self.res_path);
+        }
+    }
+}
+
+
+#[repr(C)]
+pub struct ConfigValues {
+    pub len: usize,
+    pub ptr: *mut ConfigValue,
+}
+
+impl Drop for ConfigValues {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.ptr.is_null() {
+                Vec::from_raw_parts(self.ptr, self.len, self.len);
+            }
         }
     }
 }
@@ -175,7 +192,7 @@ pub extern "C" fn get_config(
     key_cnt: usize,
     view_mode: ViewMode,
     need_explain: u8,
-) -> *mut ConfigValue {
+) -> *mut ConfigValues {
     let ns = unsafe {
         assert!(!ns.is_null());
         &*ns
@@ -205,8 +222,8 @@ pub extern "C" fn get_config(
 }
 
 #[no_mangle]
-pub extern "C" fn free_config_value(v: *mut ConfigValue, n: usize) {
-    unsafe { Vec::from_raw_parts(v, n, n) };
+pub extern "C" fn free_config_values(v: *mut ConfigValues) {
+    unsafe { Box::from_raw(v); };
 }
 
 fn build_storage_backend_from_cfg(
@@ -263,8 +280,8 @@ fn convert_get_cfg_input_value<'a>(
 #[inline(always)]
 fn convert_get_cfg_output_value(
     values: Vec<CFGResult>,
-) -> Result<*mut ConfigValue, String>{
-    let mut ret = Vec::with_capacity(values.len());
+) -> Result<*mut ConfigValues, String>{
+    let mut array_ret = Vec::with_capacity(values.len());
     for v in values {
         let reason = match v.reason {
             Some(r) => Box::into_raw(Box::new(ConfigValueReason {
@@ -284,13 +301,28 @@ fn convert_get_cfg_output_value(
             reason,
         };
 
-        ret.push(item);
+        array_ret.push(item);
     }
 
-    ret.shrink_to_fit();
-    let mut ret = ManuallyDrop::new(ret);
-    let t = ret.as_mut_ptr();
-    return Ok(t);
+    array_ret.push(ConfigValue {
+        content_type: ptr::null_mut(),
+        key: ptr::null_mut(),
+        value: ptr::null_mut(),
+        reason:ptr::null_mut(),
+    });
+
+    array_ret.shrink_to_fit();
+    let mut array_ret = ManuallyDrop::new(array_ret);
+    let array_ret_ptr = array_ret.as_mut_ptr();
+
+    let ret = Box::into_raw(Box::new(
+        ConfigValues{
+            len: array_ret.len(),
+            ptr: array_ret_ptr,
+        }
+    ));
+
+    return Ok(ret);
 }
 
 
@@ -308,7 +340,7 @@ pub extern "C" fn differ_get_from_old(
     key_cnt: usize,
     view_mode: ViewMode,
     need_explain: u8,
-) -> *mut ConfigValue {
+) -> *mut ConfigValues {
     let differ = unsafe {
         assert!(!differ.is_null());
         &*differ
@@ -344,7 +376,7 @@ pub extern "C" fn differ_get_from_new(
     key_cnt: usize,
     view_mode: ViewMode,
     need_explain: u8,
-) -> *mut ConfigValue {
+) -> *mut ConfigValues {
     let differ = unsafe {
         assert!(!differ.is_null());
         &*differ
