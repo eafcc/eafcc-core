@@ -115,8 +115,8 @@ pub extern "C" fn new_whoami(val: *const c_char) -> *const WhoAmI {
 }
 
 #[no_mangle]
-pub extern "C" fn free_context(ctx: *mut WhoAmI) {
-    unsafe { Box::from_raw(ctx) };
+pub extern "C" fn free_whoami(whoami: *mut WhoAmI) {
+    unsafe { Box::from_raw(whoami) };
 }
 
 #[repr(C)]

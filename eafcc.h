@@ -54,7 +54,7 @@ void free_namespace(const eafcc_NamespaceScopedCFGCenter *ns);
 
 const eafcc_WhoAmI *new_whoami(const char *val);
 
-void free_context(eafcc_WhoAmI *ctx);
+void free_whoami(eafcc_WhoAmI *whoami);
 
 eafcc_ConfigValues *get_config(const eafcc_NamespaceScopedCFGCenter *ns,
                                const eafcc_WhoAmI *whoami,

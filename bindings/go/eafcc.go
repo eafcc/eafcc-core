@@ -21,6 +21,7 @@ import (
 
 // #cgo amd64 386 CFLAGS: -DX86=1
 // #cgo LDFLAGS: -L${SRCDIR} -leafcc
+// #include <stdint.h>
 // #include <stdlib.h>
 // #include <stdbool.h>
 // #include <eafcc.h>
@@ -273,7 +274,7 @@ func (c *Namespace) NewWhoAmI(whoAmI string) *WhoAmI {
 
 func (c *WhoAmI) Free() {
 	if c.ctx != nil {
-		C.free_context((*C.eafcc_WhoAmI)(c.ctx))
+		C.free_whoami((*C.eafcc_WhoAmI)(c.ctx))
 	}
 }
 
