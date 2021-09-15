@@ -2,7 +2,7 @@ use crate::{error::StorageBackendError, model::object::{ObjectID, ObjectIDRef}};
 use std::{cell::Cell, collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, mpsc::{channel, Receiver}}};
 
 use super::{DirItem, StorageBackend, StorageChangeEvent};
-use notify::{DebouncedEvent, FsEventWatcher, RecursiveMode, Watcher, watcher};
+use notify::{DebouncedEvent, RecursiveMode, RecommendedWatcher, Watcher, watcher};
 use super::Result;
 use std::str;
 use std::thread;
@@ -20,7 +20,7 @@ This backend is for develop and testing, Never use this backend in production, b
 
 pub struct FilesystemBackend {
     base_path: PathBuf,
-    watcher: Mutex<Option<FsEventWatcher>>,
+    watcher: Mutex<Option<RecommendedWatcher>>,
 }
 
 impl FilesystemBackend {
