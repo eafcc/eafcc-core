@@ -2,7 +2,7 @@ use crate::{error::StorageBackendError, model::object::{ObjectID, ObjectIDRef}};
 use std::{cell::Cell, collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, mpsc::{channel, Receiver}}};
 
 use super::{DirItem, StorageBackend, StorageChangeEvent};
-use notify::{DebouncedEvent, RecursiveMode, RecommendedWatcher, Watcher, watcher};
+use notify::{DebouncedEvent, RecursiveMode, PollWatcher, Watcher, watcher};
 use super::Result;
 use std::str;
 use std::thread;
@@ -20,7 +20,7 @@ This backend is for develop and testing, Never use this backend in production, b
 
 pub struct FilesystemBackend {
     base_path: PathBuf,
-    watcher: Mutex<Option<RecommendedWatcher>>,
+    watcher: Mutex<Option<PollWatcher>>,
 }
 
 impl FilesystemBackend {
@@ -106,15 +106,12 @@ impl StorageBackend for FilesystemBackend {
             });
         });
 
-        // Create a channel to receive the events.
         let (tx, rx) = channel();
 
-        // Create a watcher object, delivering debounced events.
-        // The notification back-end is selected based on the platform.
-        let mut watcher = watcher(tx, Duration::from_secs(2)).or(Err(StorageBackendError::UpdateWatchingError("error while setting up update watcher")))?;
+        // We use PollWatcher because we may use nfs so inotify maybe not work when file changed is triggered by some remote machine.
+        // On the other hand, we only monitor a single file, so there won't be too mach overhead.
+        let mut watcher = PollWatcher::new(tx, Duration::from_secs(2)).or(Err(StorageBackendError::UpdateWatchingError("error while setting up update watcher")))?;
 
-        // Add a path to be watched. All files and directories at that path and
-        // below will be monitored for changes.
         watcher.watch(&path, RecursiveMode::Recursive).or(Err(StorageBackendError::UpdateWatchingError("error while setting up update watcher")))?;
 
         let path_for_closure = path.clone();
@@ -145,7 +142,7 @@ impl StorageBackend for FilesystemBackend {
 
 fn read_version_from_fs(path: &Path) -> Result<String>{
     let t = fs::read(path)?;
-    Ok(String::from_utf8(t).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?)
+    Ok(String::from_utf8(t).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?.to_string())
 }
 
 fn eafcc_watcher(rx: Receiver<DebouncedEvent>, path: PathBuf, cb: Box<dyn Fn(String)>) {
