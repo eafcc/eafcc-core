@@ -6,6 +6,8 @@ use std::io::Error as IOError;
 use std::sync::PoisonError;
 use serde_json::Error as SerdeError;
 
+use git2::Error as Git2Error;
+
 use serde_json;
 use thiserror::Error;
 
@@ -43,6 +45,8 @@ pub enum MemoryIndexError {
 	DataLoaderError(#[from] DataLoaderError),
 	#[error("error while building index: {0}")]
 	StorageBackendError(#[from] StorageBackendError),
+	#[error("error, namespace must in absolute form, i.e., start with `/`")]
+	NamespaceNotAbsolutePath,
 }
 
 
@@ -62,6 +66,27 @@ pub enum StorageBackendError {
 	UpdateWatchingError(&'static str),
 	#[error("error while doing IO: {0}")]	
 	IOError(#[from] IOError),
+	#[error("error while operating on git backend: {0}")]	
+	Git2Error(#[from] Git2Error),
+	#[error("error while operating on git backend: {0}")]	
+	WalkDirError(#[from] Box<WalkDirError>),
+	#[error("error while operating on git backend: {0}")]	
+	ListDirError(#[from] ListDirError),
+}
+
+#[derive(Error, Debug)]
+pub enum ListDirError {
+	#[error("prefix not match, some link in filesystem backend maybe wrong")]	
+	PathPrefixHandlingError,
+	
+}
+
+#[derive(Error, Debug)]
+pub enum WalkDirError {
+	#[error("error while operating on git backend: {0}")]	
+	StorageBackendError(#[from] StorageBackendError),
+	#[error("error while operating on git backend: {0}")]	
+	DataLoaderError(#[from] DataLoaderError),
 }
 
 #[derive(Error, Debug)]

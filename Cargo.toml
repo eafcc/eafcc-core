@@ -17,12 +17,13 @@ nom = "6.2.1"
 unescape = "0.1.0"
 libc = "0.2"
 notify = "4.0.17"
+git2 = "0.13.22"
 
 [profile.release]
 debug = true
 
 [profile.test]
-opt-level = 3
+opt-level = 0
 debug = true
 debug-assertions = false
 overflow-checks = false

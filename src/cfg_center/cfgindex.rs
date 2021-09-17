@@ -1,10 +1,11 @@
+use std::path::PathBuf;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::error::MemoryIndexError;
 use crate::rule_engine::{Condition, MatchContext};
 
 use crate::model;
-use crate::storage_backends::StorageBackend;
+use crate::storage_backends::{DirItem, StorageBackend, WalkRetCtl};
 
 type Result<T> = std::result::Result<T, MemoryIndexError>;
 
@@ -29,21 +30,17 @@ impl IndexBuilder {
         index: &mut CFGIndex,
         version: &str,
     ) -> Result<()> {
-        let mut nodes_to_visit: Vec<String> = Vec::with_capacity(32);
-        nodes_to_visit.push("/rules".to_string() + namespace);
-        while let Some(ref parent_node) = nodes_to_visit.pop() {
-            for cur_node in backend.list_dir(version, &parent_node)?{
-                let full_path = parent_node.to_owned() + &cur_node.name;
-                if cur_node.name.ends_with("/") {
-                    nodes_to_visit.push(full_path);
-                    continue;
-                }
+        let path =  PathBuf::from("/rules").join(namespace.strip_prefix("/").ok_or(MemoryIndexError::NamespaceNotAbsolutePath)?);
+        backend.walk_dir(version, &path, &mut |cur_node| {
+            if !cur_node.is_dir() {
                 let rule_raw_data = backend.get_obj_by_hash(&cur_node.hash)?;
                 let rule_obj = model::rule::Rule::load_from_slice(&rule_raw_data)?;
-				let str_skio_internal_prefix = &full_path[6..];
-                index.rule_stor.add_rule(str_skio_internal_prefix, &rule_obj);
+				let str_skio_internal_prefix = cur_node.abs_path.strip_prefix("/rules").expect("should not reach here, /rules prefix must be there").to_string_lossy();
+                index.rule_stor.add_rule(&str_skio_internal_prefix, &rule_obj);
             }
-        }
+            return Ok(WalkRetCtl::Next)
+        })?;
+
         return Ok(());
     }
 
@@ -53,21 +50,17 @@ impl IndexBuilder {
         index: &mut CFGIndex,
         version: &str,
     ) -> Result<()> {
-        let mut nodes_to_visit: Vec<String> = Vec::with_capacity(32);
-        nodes_to_visit.push("/links".to_string() + namespace);
-        while let Some(ref parent_node) = nodes_to_visit.pop() {
-            for cur_node in backend.list_dir(version, &parent_node)? {
-                let full_path = parent_node.to_owned() + &cur_node.name;
-                if cur_node.name.ends_with("/") {
-                    nodes_to_visit.push(full_path);
-                    continue;
-                }
+        let path =  PathBuf::from("/links").join(namespace.strip_prefix("/").ok_or(MemoryIndexError::NamespaceNotAbsolutePath)?);
+        backend.walk_dir(version, &path, &mut |cur_node| {
+            if !cur_node.is_dir() {
                 let link_raw_data = backend.get_obj_by_hash(&cur_node.hash)?;
                 let link_obj = model::link::Link::load_from_slice(&link_raw_data)?;
-				let str_skio_internal_prefix = &full_path[6..];
-                index.link_stor.add_link(str_skio_internal_prefix, &link_obj);
+				let str_skio_internal_prefix = cur_node.abs_path.strip_prefix("/links").expect("should not reach here, /links prefix must be there").to_string_lossy();
+                index.link_stor.add_link(&str_skio_internal_prefix, &link_obj);
             }
-        }
+            return Ok(WalkRetCtl::Next)
+        })?;
+
         return Ok(());
     }
 
@@ -77,21 +70,17 @@ impl IndexBuilder {
         index: &mut CFGIndex,
         version: &str,
     ) -> Result<()> {
-        let mut nodes_to_visit: Vec<String> = Vec::with_capacity(32);
-        nodes_to_visit.push("/reses".to_string() + namespace);
-        while let Some(ref parent_node) = nodes_to_visit.pop() {
-            for cur_node in backend.list_dir(version, &parent_node)? {
-                let full_path = parent_node.to_owned() + &cur_node.name;
-                if cur_node.name.ends_with("/") {
-                    nodes_to_visit.push(full_path);
-                    continue;
-                }
+        let path =  PathBuf::from("/reses").join(namespace.strip_prefix("/").ok_or(MemoryIndexError::NamespaceNotAbsolutePath)?);
+        backend.walk_dir(version, &path, &mut |cur_node| {
+            if !cur_node.is_dir() {
                 let res_raw_data = backend.get_obj_by_hash(&cur_node.hash)?;
                 let res_group_obj = model::res::Res::load_from_slice(&res_raw_data)?;
-				let str_skio_internal_prefix = &full_path[6..];
-                index.res_stor.add_res(str_skio_internal_prefix, res_group_obj);
+				let str_skio_internal_prefix = cur_node.abs_path.strip_prefix("/reses").expect("should not reach here, /reses prefix must be there").to_string_lossy();
+                index.res_stor.add_res(&str_skio_internal_prefix, res_group_obj);
             }
-        }
+            return Ok(WalkRetCtl::Next)
+        })?;
+
         return Ok(());
     }
 
@@ -257,6 +246,6 @@ impl ResIndex {
 }
 
 fn remove_path_type_prefix(i: &str) -> &str {
-    // remove `path:`
-    return &i[5..];
+    // remove `path:/`
+    return &i[6..];
 }

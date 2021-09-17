@@ -1,9 +1,21 @@
-use crate::{error::StorageBackendError, model::object::{ObjectID, ObjectIDRef}};
-use std::{cell::Cell, collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex, mpsc::{channel, Receiver}}};
+use crate::{
+    error::{ListDirError, StorageBackendError},
+    model::object::{ObjectID, ObjectIDRef},
+};
+use std::{
+    cell::Cell,
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::{
+        mpsc::{channel, Receiver},
+        Arc, Mutex,
+    },
+};
 
-use super::{DirItem, StorageBackend, StorageChangeEvent};
-use notify::{DebouncedEvent, RecursiveMode, PollWatcher, Watcher, watcher};
 use super::Result;
+use super::{DirItem, StorageBackend, StorageChangeEvent};
+use notify::{watcher, DebouncedEvent, PollWatcher, RecursiveMode, Watcher};
 use std::str;
 use std::thread;
 use std::time::Duration;
@@ -32,10 +44,13 @@ impl FilesystemBackend {
         return ret;
     }
 
-    fn get_versioned_path(&self, version: &str, path: &str) -> PathBuf {
+    fn get_versioned_path(&self, version: &str, path: &Path) -> PathBuf {
         let t = self.base_path.join(version);
         if path.starts_with("/") {
-            t.join(&path[1..])
+            t.join(
+                path.strip_prefix("/")
+                    .expect("should not reacher here, path has prefix"),
+            )
         } else {
             t.join(path)
         }
@@ -51,36 +66,30 @@ impl StorageBackend for FilesystemBackend {
         Ok(fs::read(path)?)
     }
 
-    fn list_dir(&self, version: &str, path: &str) -> Result<Vec<DirItem>> {
+    fn list_dir(&self, version: &str, path: &Path) -> Result<Vec<DirItem>> {
         let mut ret = Vec::new();
 
-        let path = self.get_versioned_path(version, path);
+        let real_fs_abs_path = self.get_versioned_path(version, path);
 
-        for t in fs::read_dir(path)? {
-            let path = t?.path();
+        for t in fs::read_dir(real_fs_abs_path)? {
+            let new_fs_abs_path = t?.path();
 
-            if let Some(f) = path.file_name() {
-                let mut f = f
-                    .to_os_string()
-                    .into_string()
-                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "invalid path"))?;
-                if path.is_dir() {
-                    f.push_str("/")
-                }
-                ret.push(DirItem {
-                    name: f,
-                    hash: Vec::from(path.to_str().ok_or(std::io::Error::new(
+            if let Some(filename) = new_fs_abs_path.file_name() {
+                let t = path.to_owned().join(filename);
+                ret.push(DirItem::new(
+                    t,
+                    new_fs_abs_path.is_dir(),
+                    Vec::from(new_fs_abs_path.to_str().ok_or(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         "invalid path",
                     ))?),
-                });
+                ));
             }
         }
-
         return Ok(ret);
     }
 
-    fn get_hash_by_path(&self, version: &str, path: &str) -> Result<ObjectID> {
+    fn get_hash_by_path(&self, version: &str, path: &Path) -> Result<ObjectID> {
         let path = self.get_versioned_path(version, path);
         if let Ok(m) = fs::metadata(&path) {
             if m.is_file() {
@@ -97,11 +106,10 @@ impl StorageBackend for FilesystemBackend {
     }
 
     fn set_update_cb(&self, cb: Box<dyn Fn(StorageChangeEvent) + Send + Sync>) -> Result<()> {
-
         let path = self.base_path.join("head");
 
         let cb_inner = Box::new(move |new_version: String| {
-            cb(StorageChangeEvent{
+            cb(StorageChangeEvent {
                 new_version: new_version.clone(),
             });
         });
@@ -110,57 +118,70 @@ impl StorageBackend for FilesystemBackend {
 
         // We use PollWatcher because we may use nfs so inotify maybe not work when file changed is triggered by some remote machine.
         // On the other hand, we only monitor a single file, so there won't be too mach overhead.
-        let mut watcher = PollWatcher::new(tx, Duration::from_secs(2)).or(Err(StorageBackendError::UpdateWatchingError("error while setting up update watcher")))?;
+        let mut watcher = PollWatcher::new(tx, Duration::from_secs(2)).or(Err(
+            StorageBackendError::UpdateWatchingError("error while setting up update watcher"),
+        ))?;
 
-        watcher.watch(&path, RecursiveMode::Recursive).or(Err(StorageBackendError::UpdateWatchingError("error while setting up update watcher")))?;
+        watcher.watch(&path, RecursiveMode::Recursive).or(Err(
+            StorageBackendError::UpdateWatchingError("error while setting up update watcher"),
+        ))?;
 
         let path_for_closure = path.clone();
 
-        *(self.watcher.lock().or(Err(StorageBackendError::UpdateWatchingError("error while setting up update watcher")))?) = Some(watcher);
+        *(self
+            .watcher
+            .lock()
+            .or(Err(StorageBackendError::UpdateWatchingError(
+                "error while setting up update watcher",
+            )))?) = Some(watcher);
 
-        thread::spawn(move || {
-            eafcc_watcher(
-                rx,
-                path_for_closure,
-                cb_inner,
-            )
-        });
-        return Ok(())
+        thread::spawn(move || eafcc_watcher(rx, path_for_closure, cb_inner));
+        return Ok(());
     }
 
-    fn get_diff_list(&self, old_version: &str, new_version: &str, namespace: &str) -> Result<Vec<String>>{
-        return Ok(Vec::new())
+    fn get_diff_list(
+        &self,
+        old_version: &str,
+        new_version: &str,
+        namespace: &str,
+    ) -> Result<Vec<String>> {
+        return Ok(Vec::new());
     }
 
-	fn get_current_version(&self) -> Result<String>{
+    fn get_current_version(&self) -> Result<String> {
         read_version_from_fs(&self.base_path.join("head"))
     }
-	fn list_versions(&self) -> Result<Vec<String>>{
-        return Ok(Vec::new())
+    fn list_versions(&self) -> Result<Vec<String>> {
+        return Ok(Vec::new());
     }
 }
 
-fn read_version_from_fs(path: &Path) -> Result<String>{
+fn read_version_from_fs(path: &Path) -> Result<String> {
     let t = fs::read(path)?;
-    Ok(String::from_utf8(t).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?.to_string())
+    Ok( str::from_utf8(&t)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
+        .trim().to_string())
 }
 
 fn eafcc_watcher(rx: Receiver<DebouncedEvent>, path: PathBuf, cb: Box<dyn Fn(String)>) {
     loop {
         match rx.recv() {
-            Ok(event) => {
-                match event {
-                    DebouncedEvent::Chmod(_) | DebouncedEvent::Create(_) | DebouncedEvent::Remove(_) | DebouncedEvent::Rename(_,_) | DebouncedEvent::Rescan | DebouncedEvent::Write(_) => {
-                        if let Ok(new_version) = read_version_from_fs(&path){
-                            cb(new_version)
-                        }
-                    },
-                    _ => continue,
+            Ok(event) => match event {
+                DebouncedEvent::Chmod(_)
+                | DebouncedEvent::Create(_)
+                | DebouncedEvent::Remove(_)
+                | DebouncedEvent::Rename(_, _)
+                | DebouncedEvent::Rescan
+                | DebouncedEvent::Write(_) => {
+                    if let Ok(new_version) = read_version_from_fs(&path) {
+                        cb(new_version)
+                    }
                 }
-            }
+                _ => continue,
+            },
             Err(e) => {
                 print_error_with_switch!("watch error: {:?}", e);
-            },
+            }
         }
     }
 }
