@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread;
 
-use crate::storage_backends::{filesystem, StorageBackend, StorageChangeEvent};
+use crate::storage_backends::{StorageBackend, StorageChangeEvent, VersionItem, filesystem};
 use crate::{rule_engine::Value, storage_backends};
 
 use super::differ::Differ;
@@ -19,7 +19,7 @@ pub struct CFGCenterInner {
 	// so it's ok and should make the backend not mutable
     backend: Arc<dyn storage_backends::StorageBackend + Send + Sync>,
     namespaces: Mutex<HashMap<String, Arc<NamespaceScopedCFGCenter>>>,
-	current_version: Mutex<String>,
+	current_version: Mutex<VersionItem>,
 }
 
 #[derive(PartialEq, Clone, Copy)]

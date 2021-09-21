@@ -1,5 +1,5 @@
 pub mod filesystem;
-// pub mod git;
+pub mod git;
 
 use std::path::{Path, PathBuf};
 
@@ -11,7 +11,7 @@ use crate::{
 type Result<T> = std::result::Result<T, StorageBackendError>;
 
 pub struct StorageChangeEvent {
-    pub new_version: String,
+    pub new_version: VersionItem,
 }
 
 pub struct DirItem {
@@ -42,27 +42,31 @@ pub enum WalkRetCtl {
     SkipCurrentNode,
     StopWalking,
 }
-
+#[derive(Clone)]
+pub struct VersionItem {
+    pub name: String,
+    pub id: ObjectID,
+}
 pub trait StorageBackend {
     fn get_obj_by_hash(&self, hash: ObjectIDRef) -> Result<Vec<u8>>;
-    fn list_dir(&self, version: &str, path: &Path) -> Result<Vec<DirItem>>;
-    fn get_hash_by_path(&self, version: &str, path: &Path) -> Result<ObjectID>;
+    fn list_dir(&self, version: &VersionItem, path: &Path) -> Result<Vec<DirItem>>;
+    fn get_hash_by_path(&self, version: &VersionItem, path: &Path) -> Result<ObjectID>;
     fn set_update_cb(
         &self,
         cb: Box<dyn Fn(StorageChangeEvent) + Send + Sync + 'static>,
     ) -> Result<()>;
     fn get_diff_list(
         &self,
-        old_version: &str,
-        new_version: &str,
+        old_version: &VersionItem,
+        new_version: &VersionItem,
         namespace: &str,
     ) -> Result<Vec<String>>;
-    fn get_current_version(&self) -> Result<String>;
-    fn list_versions(&self) -> Result<Vec<String>>;
+    fn get_current_version(&self) -> Result<VersionItem>;
+    fn list_versions(&self, start: usize, limit: usize) -> Result<Vec<VersionItem>>;
 
     fn walk_dir(
         &self,
-        version: &str,
+        version: &VersionItem,
         path: &Path,
         cb: &mut dyn FnMut(&DirItem) -> std::result::Result<WalkRetCtl, WalkDirError>,
     ) -> Result<()> {

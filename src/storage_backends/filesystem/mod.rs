@@ -13,8 +13,9 @@ use std::{
     },
 };
 
-use super::Result;
+use super::{Result, VersionItem};
 use super::{DirItem, StorageBackend, StorageChangeEvent};
+use nom::AsBytes;
 use notify::{watcher, DebouncedEvent, PollWatcher, RecursiveMode, Watcher};
 use std::str;
 use std::thread;
@@ -44,16 +45,16 @@ impl FilesystemBackend {
         return ret;
     }
 
-    fn get_versioned_path(&self, version: &str, path: &Path) -> PathBuf {
-        let t = self.base_path.join(version);
-        if path.starts_with("/") {
+    fn get_versioned_path(&self, version: &VersionItem, path: &Path) -> Result<PathBuf> {
+        let t = self.base_path.join(str::from_utf8(version.id.as_bytes())?);
+        Ok(if path.starts_with("/") {
             t.join(
                 path.strip_prefix("/")
                     .expect("should not reacher here, path has prefix"),
             )
         } else {
             t.join(path)
-        }
+        })
     }
 }
 
@@ -66,10 +67,10 @@ impl StorageBackend for FilesystemBackend {
         Ok(fs::read(path)?)
     }
 
-    fn list_dir(&self, version: &str, path: &Path) -> Result<Vec<DirItem>> {
+    fn list_dir(&self, version: &VersionItem, path: &Path) -> Result<Vec<DirItem>> {
         let mut ret = Vec::new();
 
-        let real_fs_abs_path = self.get_versioned_path(version, path);
+        let real_fs_abs_path = self.get_versioned_path(version, path)?;
 
         for t in fs::read_dir(real_fs_abs_path)? {
             let new_fs_abs_path = t?.path();
@@ -89,8 +90,8 @@ impl StorageBackend for FilesystemBackend {
         return Ok(ret);
     }
 
-    fn get_hash_by_path(&self, version: &str, path: &Path) -> Result<ObjectID> {
-        let path = self.get_versioned_path(version, path);
+    fn get_hash_by_path(&self, version: &VersionItem, path: &Path) -> Result<ObjectID> {
+        let path = self.get_versioned_path(version, path)?;
         if let Ok(m) = fs::metadata(&path) {
             if m.is_file() {
                 return Ok(Vec::from(path.to_str().ok_or(std::io::Error::new(
@@ -108,7 +109,7 @@ impl StorageBackend for FilesystemBackend {
     fn set_update_cb(&self, cb: Box<dyn Fn(StorageChangeEvent) + Send + Sync>) -> Result<()> {
         let path = self.base_path.join("head");
 
-        let cb_inner = Box::new(move |new_version: String| {
+        let cb_inner = Box::new(move |new_version: VersionItem| {
             cb(StorageChangeEvent {
                 new_version: new_version.clone(),
             });
@@ -141,29 +142,35 @@ impl StorageBackend for FilesystemBackend {
 
     fn get_diff_list(
         &self,
-        old_version: &str,
-        new_version: &str,
+        old_version: &VersionItem,
+        new_version: &VersionItem,
         namespace: &str,
     ) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
 
-    fn get_current_version(&self) -> Result<String> {
+    fn get_current_version(&self) -> Result<VersionItem> {
         read_version_from_fs(&self.base_path.join("head"))
     }
-    fn list_versions(&self) -> Result<Vec<String>> {
+    fn list_versions(&self, start: usize, limit: usize) -> Result<Vec<VersionItem>> {
         return Ok(Vec::new());
     }
 }
 
-fn read_version_from_fs(path: &Path) -> Result<String> {
+fn read_version_from_fs(path: &Path) -> Result<VersionItem> {
     let t = fs::read(path)?;
-    Ok( str::from_utf8(&t)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?
-        .trim().to_string())
+    let name = str::from_utf8(&t)?
+        .trim()
+        .to_string();
+    let id = ObjectID::from(name.as_bytes());
+    Ok(VersionItem{
+        name,
+        id
+    })
+    
 }
 
-fn eafcc_watcher(rx: Receiver<DebouncedEvent>, path: PathBuf, cb: Box<dyn Fn(String)>) {
+fn eafcc_watcher(rx: Receiver<DebouncedEvent>, path: PathBuf, cb: Box<dyn Fn(VersionItem)>) {
     loop {
         match rx.recv() {
             Ok(event) => match event {

@@ -72,6 +72,8 @@ pub enum StorageBackendError {
 	WalkDirError(#[from] Box<WalkDirError>),
 	#[error("error while operating on git backend: {0}")]	
 	ListDirError(#[from] ListDirError),
+	#[error("error while converting string: {0}")]	
+	Utf8Error(#[from] Utf8Error),
 }
 
 #[derive(Error, Debug)]

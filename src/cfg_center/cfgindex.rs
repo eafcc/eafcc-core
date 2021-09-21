@@ -5,7 +5,7 @@ use crate::error::MemoryIndexError;
 use crate::rule_engine::{Condition, MatchContext};
 
 use crate::model;
-use crate::storage_backends::{DirItem, StorageBackend, WalkRetCtl};
+use crate::storage_backends::{DirItem, StorageBackend, VersionItem, WalkRetCtl};
 
 type Result<T> = std::result::Result<T, MemoryIndexError>;
 
@@ -28,7 +28,7 @@ impl IndexBuilder {
         backend: &dyn StorageBackend,
         namespace: &str,
         index: &mut CFGIndex,
-        version: &str,
+        version: &VersionItem,
     ) -> Result<()> {
         let path =  PathBuf::from("/rules").join(namespace.strip_prefix("/").ok_or(MemoryIndexError::NamespaceNotAbsolutePath)?);
         backend.walk_dir(version, &path, &mut |cur_node| {
@@ -48,7 +48,7 @@ impl IndexBuilder {
         backend: &dyn StorageBackend,
         namespace: &str,
         index: &mut CFGIndex,
-        version: &str,
+        version: &VersionItem,
     ) -> Result<()> {
         let path =  PathBuf::from("/links").join(namespace.strip_prefix("/").ok_or(MemoryIndexError::NamespaceNotAbsolutePath)?);
         backend.walk_dir(version, &path, &mut |cur_node| {
@@ -68,7 +68,7 @@ impl IndexBuilder {
         backend: &dyn StorageBackend,
         namespace: &str,
         index: &mut CFGIndex,
-        version: &str,
+        version: &VersionItem,
     ) -> Result<()> {
         let path =  PathBuf::from("/reses").join(namespace.strip_prefix("/").ok_or(MemoryIndexError::NamespaceNotAbsolutePath)?);
         backend.walk_dir(version, &path, &mut |cur_node| {
@@ -84,7 +84,7 @@ impl IndexBuilder {
         return Ok(());
     }
 
-    pub fn load(backend: &dyn StorageBackend, namespace:&str, version: &str) -> Result<CFGIndex> {
+    pub fn load(backend: &dyn StorageBackend, namespace:&str, version: &VersionItem) -> Result<CFGIndex> {
         let mut cfg_index = CFGIndex {
             rule_stor: RuleIndex::new(),
             res_stor: ResIndex::new(),
