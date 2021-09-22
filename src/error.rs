@@ -1,3 +1,4 @@
+use std::path::StripPrefixError;
 use std::result;
 
 use std::ffi::NulError;
@@ -74,6 +75,8 @@ pub enum StorageBackendError {
 	ListDirError(#[from] ListDirError),
 	#[error("error while converting string: {0}")]	
 	Utf8Error(#[from] Utf8Error),
+	#[error("error while internally converting path: {0}")]	
+	StripPrefixError(#[from] StripPrefixError),
 }
 
 #[derive(Error, Debug)]

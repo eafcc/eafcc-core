@@ -52,29 +52,46 @@ impl StorageBackend for GitBackend {
         let oid = Oid::from_bytes(&version.id)?;
         let commit = self.git_repo.find_commit(oid)?;
         let root_tree = commit.tree()?;
-        let walk_start_point = root_tree.get_path(path)?;
-        if let Some(tree) = walk_start_point.to_object(&self.git_repo)?.as_tree() {
-            tree.walk(TreeWalkMode::PreOrder, |filename, entry| {
-                let abs_path =  PathBuf::from_str(match entry.name(){
-                    Some(t) => t,
-                    None => return 0,
-                }).unwrap();
-                let hash = Vec::from(entry.id().as_bytes());
-                let is_dir = match entry.kind() {
-                    Some(git2::ObjectType::Tree) => true,
-                    _ => false,
-                };
-                let dir_item = DirItem::new(abs_path, is_dir, hash);
-                match cb(&dir_item) {
-                    Ok(t) => match t {
-                        WalkRetCtl::Next => 0,
-                        WalkRetCtl::SkipCurrentNode => 1,
-                        WalkRetCtl::StopWalking => -1,
-                    },
-                    Err(_) => 0,
-                }
-            })?;
-        }
+
+        // libgit2 do not support abs path
+        let t_obj;
+        let walk_start_point = if path == Path::new("/") {
+             &root_tree
+        } else {
+            let path_for_git = if path.starts_with("/") {
+                path.strip_prefix("/")?
+            } else {
+                path
+            };
+            t_obj = root_tree.get_path(path_for_git)?.to_object(&self.git_repo)?;
+            match t_obj.as_tree(){
+                Some(t) => t,
+                None => return Ok(()),
+            }
+        };
+        
+        walk_start_point.walk(TreeWalkMode::PreOrder, |root_rel_path, entry| {
+            let filename =  match entry.name(){
+                Some(t) => t,
+                None => return 0,
+            };
+            let abs_path = path.to_owned().join(root_rel_path).join(filename);
+            let hash = Vec::from(entry.id().as_bytes());
+            let is_dir = match entry.kind() {
+                Some(git2::ObjectType::Tree) => true,
+                _ => false,
+            };
+            let dir_item = DirItem::new(abs_path, is_dir, hash);
+            match cb(&dir_item) {
+                Ok(t) => match t {
+                    WalkRetCtl::Next => 0,
+                    WalkRetCtl::SkipCurrentNode => 1,
+                    WalkRetCtl::StopWalking => -1,
+                },
+                Err(_) => 0,
+            }
+        })?;
+        
 
         return Ok(());
     }
@@ -119,8 +136,15 @@ fn test_git_backend_smoke() {
     let base_path = project_base_dir
         .join(".git");
     let mut backend = Box::new(GitBackend::new(base_path, "master".to_string()).unwrap());
-    let t = backend.get_current_version().unwrap();
-    println!("{}", t.name);
-    println!("{:?}", t.id);
+    let ver = backend.get_current_version().unwrap();
+    println!("{}", ver.name);
+    println!("{:?}", ver.id);
+
+    let cb = &mut |d:&DirItem| {
+        println!("{:?} == {:?}", d.abs_path, d.hash);
+        Ok(WalkRetCtl::Next)
+    };
+
+    backend.walk_dir(&ver, &Path::new("/test/mock_data"), cb).unwrap();
     
 }
