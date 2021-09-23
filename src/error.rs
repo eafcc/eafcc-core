@@ -77,6 +77,8 @@ pub enum StorageBackendError {
 	Utf8Error(#[from] Utf8Error),
 	#[error("error while internally converting path: {0}")]	
 	StripPrefixError(#[from] StripPrefixError),
+	#[error("error while internally getting lock")]	
+	LockPosionedError,
 }
 
 #[derive(Error, Debug)]

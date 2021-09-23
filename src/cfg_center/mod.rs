@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::thread;
 
 use crate::rule_engine::Value;
-use crate::storage_backends::{filesystem, StorageBackend};
+use crate::storage_backends::{filesystem, StorageBackend, git};
 
 pub use crate::cfg_center::cfg_center::{CFGCenter, ViewMode};
 pub use crate::cfg_center::differ::Differ;
@@ -74,3 +74,58 @@ fn test_load_res_and_query() {
 
     // thread::sleep(time::Duration::from_secs(10000))
 }
+
+
+
+#[test]
+fn test_git_backend_load_res_and_query() {
+    let base_path = PathBuf::from("/tmp/git_backend/.git");
+    let local_git_repo = format!("{}@localhost:/tmp/git_backend_r/.git", env!("USER"));
+    let mut backend = Box::new(git::GitBackend::new(base_path, local_git_repo, "master".to_owned()).unwrap());
+    let mut cc = CFGCenter::new(backend).unwrap();
+    
+    let cfg_ns = cc.create_namespace_scoped_cfg_center("/", UpdateNotifyLevel::NotifyWithoutChangedKeysByGlobal, Some(Box::new(|_|{println!("update...")}))).unwrap();
+
+    let cc1 = cfg_ns.clone();
+    let cc2 = cfg_ns.clone();
+
+    let t1 = thread::spawn(move || {
+        for i in 0..6000000 {
+            let mut ctx = HashMap::new();
+            ctx.insert("foo".to_string(), Value::Str("123".to_string()));
+            ctx.insert("bar".to_string(), Value::Str("456".to_string()));
+
+            let my_key = vec!["my_key", "my_key", "my_key"];
+            let t = cc1
+                .get_cfg(&ctx, &my_key, ViewMode::OverlaidView, true).unwrap();
+            
+            if t.len() > 0 {
+                println!("{}", t[0].value.value);
+            } else {
+                println!("no result");
+            }
+            
+            thread::sleep(time::Duration::from_secs(1));
+        }
+    });
+
+    let t2 = thread::spawn(move || {
+        for _ in 0..6000000 {
+            let mut ctx = HashMap::new();
+            ctx.insert("foo".to_string(), Value::Str("123".to_string()));
+            ctx.insert("bar".to_string(), Value::Str("456".to_string()));
+
+            let my_key = vec!["my_key", "my_key", "my_key"];
+            let t = cc2
+                .get_cfg(&ctx, &my_key, ViewMode::OverlaidView, true)
+                .unwrap();
+            assert!(t.len() == 3)
+        }
+    });
+
+    t1.join();
+    t2.join();
+
+    // thread::sleep(time::Duration::from_secs(10000))
+}
+
