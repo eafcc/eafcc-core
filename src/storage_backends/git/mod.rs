@@ -12,7 +12,7 @@ use parking_lot::{ReentrantMutex, RwLock};
 
 
 pub struct GitBackend(Arc<RwLock<GitBackendInner>>);
-pub struct GitBackendInner {
+struct GitBackendInner {
     local_repo_path: PathBuf,
     remote_repo_url: String,
     git_repo: Arc<ReentrantMutex<Repository>>,

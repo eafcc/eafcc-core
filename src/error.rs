@@ -104,6 +104,9 @@ pub enum FFIError {
 	StringConvertUtf8Error(#[from] Utf8Error),
 	#[error("error building backend from config: {0}")]	
 	CreateBackendError(&'static str),
+	#[error("error building backend from config: {0}")]	
+	StorageBackendError(#[from] StorageBackendError),
+
 }
 
 

@@ -1,6 +1,7 @@
 use crate::cfg_center::{self, CFGResult, Differ, NamespaceScopedCFGCenter, UpdateNotifyLevel};
+use crate::error::FFIError;
 use crate::rule_engine::Value;
-use crate::storage_backends::{self, filesystem};
+use crate::storage_backends::{self, filesystem, git};
 use serde_json;
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -12,7 +13,6 @@ use std::ptr;
 use std::slice;
 use std::str::FromStr;
 use std::sync::Arc;
-use crate::error::FFIError;
 
 type Result<T> = std::result::Result<T, FFIError>;
 
@@ -138,7 +138,6 @@ impl Drop for ConfigValueReason {
     }
 }
 
-
 #[repr(C)]
 pub struct ConfigValues {
     pub len: usize,
@@ -201,22 +200,20 @@ pub extern "C" fn get_config(
         &*ns
     };
 
-
     let (whoami, keys) = match convert_get_cfg_input_value(whoami, keys, key_cnt) {
         Ok((whoami, keys)) => (whoami, keys),
-        Err(_ ) => {return ptr::null_mut()},
+        Err(_) => return ptr::null_mut(),
     };
 
-    let values = match ns
-            .get_cfg(
-                &whoami.0,
-                &keys,
-                view_mode,
-                if need_explain == 0 { false } else { true },
-            ){
-                Ok(values) => values,
-                Err(_) => {return ptr::null_mut()},
-            };
+    let values = match ns.get_cfg(
+        &whoami.0,
+        &keys,
+        view_mode,
+        if need_explain == 0 { false } else { true },
+    ) {
+        Ok(values) => values,
+        Err(_) => return ptr::null_mut(),
+    };
 
     match convert_get_cfg_output_value(values) {
         Ok(p) => return p,
@@ -226,28 +223,82 @@ pub extern "C" fn get_config(
 
 #[no_mangle]
 pub extern "C" fn free_config_values(v: *mut ConfigValues) {
-    unsafe { Box::from_raw(v); };
+    unsafe {
+        Box::from_raw(v);
+    };
 }
 
 fn build_storage_backend_from_cfg(
     cfg: &serde_json::Value,
 ) -> Result<Box<dyn storage_backends::StorageBackend + Send + Sync>> {
-    let cfg = cfg.as_object().ok_or(FFIError::CreateBackendError("cfg format error"))?;
+    let cfg = cfg
+        .as_object()
+        .ok_or(FFIError::CreateBackendError("cfg format error"))?;
     let ty = cfg
         .get("type")
-        .ok_or(FFIError::CreateBackendError("must have a `type` filed for storage_backend"))?
+        .ok_or(FFIError::CreateBackendError(
+            "must have a `type` filed for storage_backend",
+        ))?
         .as_str()
-        .ok_or(FFIError::CreateBackendError("`storage_backend` must be string"))?;
+        .ok_or(FFIError::CreateBackendError(
+            "`storage_backend` must be string",
+        ))?;
 
     match ty {
         "filesystem" => {
             let path = cfg
                 .get("path")
-                .ok_or(FFIError::CreateBackendError("filesystem backend must have a `path` filed"))?
+                .ok_or(FFIError::CreateBackendError(
+                    "filesystem backend must have a `path` filed",
+                ))?
                 .as_str()
                 .ok_or(FFIError::CreateBackendError("`path` must be string"))?;
-            let path = PathBuf::from_str(path).or(Err(FFIError::CreateBackendError("path invalid")))?;
+            let path =
+                PathBuf::from_str(path).or(Err(FFIError::CreateBackendError("path invalid")))?;
             let backend = filesystem::FilesystemBackend::new(path);
+            Ok(Box::new(backend))
+        }
+        "git-normal" => {
+            let local_repo_path = cfg
+                .get("local_repo_path")
+                .ok_or(FFIError::CreateBackendError(
+                    "git-normal backend must have a `local_repo_path` filed",
+                ))?
+                .as_str()
+                .ok_or(FFIError::CreateBackendError(
+                    "`local_repo_path` must be string",
+                ))?;
+
+            let local_repo_path =
+                PathBuf::from_str(local_repo_path).or(Err(FFIError::CreateBackendError(
+                    "git-normal backend `local_repo_path` is not a valid path string",
+                )))?;
+
+            let remote_repo_url = cfg
+                .get("remote_repo_url")
+                .ok_or(FFIError::CreateBackendError(
+                    "git-normal backend must have a `remote_repo_url` filed",
+                ))?
+                .as_str()
+                .ok_or(FFIError::CreateBackendError(
+                    "`remote_repo_url` must be string",
+                ))?
+                .to_string();
+
+            let target_branch_name = cfg
+                .get("target_branch_name")
+                .ok_or(FFIError::CreateBackendError(
+                    "git-normal backend must have a `target_branch_name` filed",
+                ))?
+                .as_str()
+                .ok_or(FFIError::CreateBackendError(
+                    "`target_branch_name` must be string",
+                ))?
+                .to_string();
+
+            let backend =
+                git::GitBackend::new(local_repo_path, remote_repo_url, target_branch_name)?;
+
             Ok(Box::new(backend))
         }
         _ => Err(FFIError::CreateBackendError("not supported backend type")),
@@ -259,7 +310,7 @@ fn convert_get_cfg_input_value<'a>(
     whoami: *const WhoAmI,
     keys: *mut *mut c_char,
     key_cnt: usize,
-) -> Result<(&'a WhoAmI, Vec<&'a str>)>{
+) -> Result<(&'a WhoAmI, Vec<&'a str>)> {
     let whoami = unsafe {
         assert!(!whoami.is_null());
         &*whoami
@@ -273,14 +324,11 @@ fn convert_get_cfg_input_value<'a>(
         ret
     };
 
-    return Ok((whoami, key))
+    return Ok((whoami, key));
 }
 
-
 #[inline(always)]
-fn convert_get_cfg_output_value(
-    values: Vec<CFGResult>,
-) -> Result<*mut ConfigValues>{
+fn convert_get_cfg_output_value(values: Vec<CFGResult>) -> Result<*mut ConfigValues> {
     let mut array_ret = Vec::with_capacity(values.len());
     for v in values {
         let reason = match v.reason {
@@ -293,7 +341,7 @@ fn convert_get_cfg_output_value(
             })),
             None => ptr::null_mut(),
         };
-        
+
         let item = ConfigValue {
             content_type: CString::new(&v.value.content_type[..])?.into_raw(),
             key: CString::new(&v.value.key[..])?.into_raw(),
@@ -308,22 +356,13 @@ fn convert_get_cfg_output_value(
     let mut array_ret = ManuallyDrop::new(array_ret);
     let array_ret_ptr = array_ret.as_mut_ptr();
 
-    let ret = Box::into_raw(Box::new(
-        ConfigValues{
-            len: array_ret.len(),
-            ptr: array_ret_ptr,
-        }
-    ));
+    let ret = Box::into_raw(Box::new(ConfigValues {
+        len: array_ret.len(),
+        ptr: array_ret_ptr,
+    }));
 
     return Ok(ret);
 }
-
-
-// #[no_mangle]
-// pub extern "C" fn differ_get_from_old(v: *mut ConfigValue, n: usize) {
-//     unsafe { Vec::from_raw_parts(v, n, n) };
-// }
-
 
 #[no_mangle]
 pub extern "C" fn differ_get_from_old(
@@ -341,19 +380,18 @@ pub extern "C" fn differ_get_from_old(
 
     let (whoami, keys) = match convert_get_cfg_input_value(whoami, keys, key_cnt) {
         Ok((whoami, keys)) => (whoami, keys),
-        Err(_ ) => {return ptr::null_mut()},
+        Err(_) => return ptr::null_mut(),
     };
 
-    let values = match differ
-            .get_from_old(
-                &whoami.0,
-                &keys,
-                view_mode,
-                if need_explain == 0 { false } else { true },
-            ){
-                Ok(values) => values,
-                Err(_) => {return ptr::null_mut()},
-            };
+    let values = match differ.get_from_old(
+        &whoami.0,
+        &keys,
+        view_mode,
+        if need_explain == 0 { false } else { true },
+    ) {
+        Ok(values) => values,
+        Err(_) => return ptr::null_mut(),
+    };
 
     match convert_get_cfg_output_value(values) {
         Ok(p) => return p,
@@ -377,19 +415,18 @@ pub extern "C" fn differ_get_from_new(
 
     let (whoami, keys) = match convert_get_cfg_input_value(whoami, keys, key_cnt) {
         Ok((whoami, keys)) => (whoami, keys),
-        Err(_ ) => {return ptr::null_mut()},
+        Err(_) => return ptr::null_mut(),
     };
 
-    let values = match differ
-            .get_from_new(
-                &whoami.0,
-                &keys,
-                view_mode,
-                if need_explain == 0 { false } else { true },
-            ){
-                Ok(values) => values,
-                Err(_) => {return ptr::null_mut()},
-            };
+    let values = match differ.get_from_new(
+        &whoami.0,
+        &keys,
+        view_mode,
+        if need_explain == 0 { false } else { true },
+    ) {
+        Ok(values) => values,
+        Err(_) => return ptr::null_mut(),
+    };
 
     match convert_get_cfg_output_value(values) {
         Ok(p) => return p,
