@@ -7,7 +7,7 @@ use super::Result;
 use std::str;
 use std::thread;
 use std::time::Duration;
-use git2::{Oid, Repository, TreeEntry, TreeWalkMode};
+use git2::{Oid, Remote, Repository, TreeEntry, TreeWalkMode};
 use parking_lot::{ReentrantMutex, RwLock};
 
 
@@ -23,17 +23,30 @@ pub struct GitBackendInner {
 impl GitBackend {
     pub fn new(local_repo_path: PathBuf, remote_repo_url: String, target_branch_name: String) -> Result<GitBackend> {
 
-		let git_repo = Repository::open_bare(local_repo_path.clone())?;
+		let git_repo = match Repository::open_bare(local_repo_path.clone()) {
+            Ok(t) => t,
+            Err(_) => {
+                // let new_repo = Repository::init_bare(local_repo_path)?;
+                // new_repo.remote_add_fetch("origin", &remote_repo_url)?;
+                let fetch_opts = get_fetch_opt();
+                let new_repo = git2::build::RepoBuilder::new().bare(true).fetch_options(fetch_opts).clone(&remote_repo_url, &local_repo_path)?;
+            
+                new_repo
+            }
+        };
         let ret = Self(Arc::new(RwLock::new(GitBackendInner{
             local_repo_path,
-            remote_repo_url,
+            remote_repo_url:remote_repo_url.clone(),
 			git_repo: Arc::new(ReentrantMutex::new(git_repo)),
-            target_branch_name,
+            target_branch_name:target_branch_name.clone(),
             cur_version: VersionItem{
                 name: "".to_string(),
                 id: ObjectID::new(),
             },
         })));
+
+
+        git_sync_local_branch(&remote_repo_url,&ret.0, &target_branch_name)?;
 
         let cur_version = ret.get_current_version()?;
         ret.0.write().cur_version = cur_version;
@@ -158,61 +171,141 @@ impl StorageBackend for GitBackend {
 fn git_watcher(remote_repo_url: String, backend_inner: Arc<RwLock<GitBackendInner>>, branch_name: String, cb: Box<dyn Fn(StorageChangeEvent) + Send + Sync>) {
     loop {
         thread::sleep(time::Duration::from_secs(2));
-        let mut remote = match git2::Remote::create_detached(remote_repo_url.as_str()) {
-            Err(e) => {
-                print_error_with_switch!("git watch error when create temp client to remote git repo: {:?}", e);
-                continue
-            }, 
-            Ok(t) => t,
-        };
-
-        let mut callbacks = git2::RemoteCallbacks::new();
-        // TODO do the cert check
-        callbacks.certificate_check(|_, _| {true});
-        callbacks.credentials(|_url, username_from_url, _allowed_types| {
-            git2::Cred::ssh_key(
-              username_from_url.unwrap(),
-              None,
-              std::path::Path::new(&format!("{}/.ssh/id_rsa", env::var("HOME").unwrap())),
-              None,
-            )
-          });
-
-        // TODO timeout control
-        match remote.connect_auth(git2::Direction::Fetch, Some(callbacks),None) {
-            Err(e) => {
-                print_error_with_switch!("git watch error when connect to remote git repo: {:?}", e);
-                continue
-            }, 
+        
+        match git_sync_local_branch(&remote_repo_url, &backend_inner, &branch_name){
+            Ok(Some(new_version)) => {
+                cb(StorageChangeEvent{
+                    new_version: new_version.clone(),
+                });
+                
+                let mut backend_inner_guard = backend_inner.write();
+                backend_inner_guard.cur_version = new_version;
+            },
             _ => {},
         };
-
-        let remote_heads = match remote.list(){
-            Err(e) => {
-                print_error_with_switch!("git update monitor get list error {:?}", e);
-                continue
-            }, 
-            Ok(t) => t,
-        };  
-        
-        let branch_name_in_refspec_format = "refs/heads/".to_owned() + &branch_name;
-        for remote_head in remote_heads {
-            println!("listed_name --> {}", remote_head.name() )   ;
-            if remote_head.name() != branch_name_in_refspec_format {
-                continue
-            }
-            println!("remote_oid: {:?}", remote_head.oid());
-            println!("local_oid: {:?}", backend_inner.read().cur_version.id);
-            
-        }
-
-        // match remote.fetch(&[branch_name.as_ref() as &str], None, None){
-            
-        // };
     }
 }
 
 
+
+
+fn git_sync_local_branch(remote_repo_url: &String, backend_inner: &Arc<RwLock<GitBackendInner>>, branch_name: &String) -> Result<Option<VersionItem>>{
+
+    let mut tmp_remote_probe = match git2::Remote::create_detached(remote_repo_url.as_str()) {
+        Err(e) => {
+            print_error_with_switch!("git watch error when create temp client to remote git repo: {:?}", e);
+            return Err(StorageBackendError::Git2Error(e)) 
+        }, 
+        Ok(t) => t,
+    };
+
+    let mut callbacks = git2::RemoteCallbacks::new();
+    // TODO do the cert check
+    callbacks.certificate_check(|_, _| {true});
+    callbacks.credentials(|_url, username_from_url, _allowed_types| {
+        git2::Cred::ssh_key(
+            username_from_url.unwrap(),
+            None,
+            std::path::Path::new(&format!("{}/.ssh/id_rsa", env::var("HOME").unwrap())),
+            None,
+        )
+        });
+
+    // TODO timeout control
+    match tmp_remote_probe.connect_auth(git2::Direction::Fetch, Some(callbacks),None) {
+        Err(e) => {
+            print_error_with_switch!("git watch error when connect to remote git repo: {:?}", e);
+            return Err(StorageBackendError::Git2Error(e)) 
+        }, 
+        _ => {},
+    };
+
+    let remote_heads = match tmp_remote_probe.list(){
+        Err(e) => {
+            print_error_with_switch!("git update monitor get list error {:?}", e);
+            return Err(StorageBackendError::Git2Error(e)) 
+        }, 
+        Ok(t) => t,
+    };  
+    
+    let branch_name_in_refspec_format = "refs/heads/".to_owned() + &branch_name;
+    let backend_inner_guard = backend_inner.read();
+    let mut newest_remote_commit_id = None;
+    for remote_head in remote_heads {
+        if remote_head.name() != branch_name_in_refspec_format {
+            continue
+        }
+        if remote_head.oid().as_bytes() == backend_inner_guard.cur_version.id {
+            return Ok(None)
+        }
+
+        newest_remote_commit_id = Some(remote_head.oid().clone());
+        break
+    }
+
+    drop(backend_inner_guard);
+    let backend_inner_guard = backend_inner.write();
+    let git_repo = backend_inner_guard.git_repo.lock();
+
+    let mut remote = match git_repo.find_remote("origin") {
+        Err(e) => {
+            print_error_with_switch!("git update monitor build fetch remote error {:?}", e);
+            return Err(StorageBackendError::Git2Error(e))
+        }, 
+        Ok(t) => t,
+    };
+
+    let mut fetch_opts = get_fetch_opt();
+    match remote.fetch (&[&branch_name_in_refspec_format], Some(&mut fetch_opts), Some("hahahah")){
+        Err(e) => {
+            print_error_with_switch!("git update monitor fetch data error {:?}", e);
+            return Err(StorageBackendError::Git2Error(e))
+        }, 
+        Ok(t) => t,
+    };
+    
+    let new_commit = match git_repo.find_commit(newest_remote_commit_id.unwrap()){
+        Err(e) => {
+            print_error_with_switch!("git update monitor get remote commit object error {:?}", e);
+            return Err(StorageBackendError::Git2Error(e))
+        }, 
+        Ok(t) => t,
+    };
+    match git_repo.branch(&backend_inner_guard.target_branch_name, &new_commit, true){
+        Err(e) => {
+            print_error_with_switch!("git update monitor change branch pointing to error {:?}", e);
+            return Err(StorageBackendError::Git2Error(e))
+        }, 
+        Ok(t) => t,
+    };
+
+    let new_version = VersionItem{
+        name: new_commit.message().unwrap_or_default().to_string(),
+        id: new_commit.id().as_bytes().to_vec(),
+    };
+
+    return Ok(Some(new_version))
+    
+}
+
+
+
+fn get_fetch_opt() -> git2::FetchOptions<'static> {
+    let mut fetch_opts = git2::FetchOptions::new();
+    let mut callbacks = git2::RemoteCallbacks::new();
+    // TODO do the cert check
+    callbacks.certificate_check(|_, _| {true});
+    callbacks.credentials(|_url, username_from_url, _allowed_types| {
+        git2::Cred::ssh_key(
+          username_from_url.unwrap(),
+          None,
+          std::path::Path::new(&format!("{}/.ssh/id_rsa", env::var("HOME").unwrap())),
+          None,
+        )
+      });
+    fetch_opts.remote_callbacks(callbacks);
+    fetch_opts
+}
 
 
 #[test]

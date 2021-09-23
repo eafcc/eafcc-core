@@ -79,8 +79,8 @@ fn test_load_res_and_query() {
 
 #[test]
 fn test_git_backend_load_res_and_query() {
-    let base_path = PathBuf::from("/tmp/git_backend/.git");
-    let local_git_repo = format!("{}@localhost:/tmp/git_backend_r/.git", env!("USER"));
+    let base_path = PathBuf::from("/data/git_backend/.git");
+    let local_git_repo = format!("{}@localhost:/data/git_backend_r/.git", env!("USER"));
     let mut backend = Box::new(git::GitBackend::new(base_path, local_git_repo, "master".to_owned()).unwrap());
     let mut cc = CFGCenter::new(backend).unwrap();
     
@@ -98,13 +98,13 @@ fn test_git_backend_load_res_and_query() {
             let my_key = vec!["my_key", "my_key", "my_key"];
             let t = cc1
                 .get_cfg(&ctx, &my_key, ViewMode::OverlaidView, true).unwrap();
-            
+
             if t.len() > 0 {
                 println!("{}", t[0].value.value);
             } else {
                 println!("no result");
             }
-            
+
             thread::sleep(time::Duration::from_secs(1));
         }
     });
