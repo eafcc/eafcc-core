@@ -3,6 +3,7 @@ use crate::error::FFIError;
 use crate::rule_engine::Value;
 use crate::storage_backends::{self, filesystem, git};
 use serde_json;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ffi::{CStr, CString, NulError};
@@ -20,6 +21,18 @@ type CFGCenter = cfg_center::CFGCenter;
 pub struct WhoAmI(HashMap<String, Value>);
 
 pub use crate::cfg_center::ViewMode;
+
+#[repr(C)]
+pub struct EAFCCError {
+    pub msg: *const c_char,
+    pub code: isize,
+}
+
+struct InternalLastError {
+    pub msg: String,
+    pub code: isize,
+    exposed_error: EAFCCError,
+}
 
 #[no_mangle]
 pub extern "C" fn new_config_center_client(cfg: *const c_char) -> *const CFGCenter {
@@ -432,4 +445,28 @@ pub extern "C" fn differ_get_from_new(
         Ok(p) => return p,
         Err(_) => return ptr::null_mut(),
     }
+}
+
+thread_local!(static LAST_ERROR: RefCell<InternalLastError> = RefCell::new(
+    InternalLastError{code: 0, msg:"".to_string(), exposed_error: EAFCCError{msg:ptr::null(), code:0}}
+));
+
+#[no_mangle]
+pub extern "C" fn get_last_error() -> *const EAFCCError {
+    let mut ret: *const EAFCCError = ptr::null();
+    LAST_ERROR.with(|e|{
+       let mut r = e.borrow_mut() ;
+       r.exposed_error.code = r.code;
+       r.exposed_error.msg = r.msg.as_ptr() as *const c_char;
+       ret = &r.exposed_error as *const EAFCCError;
+    });
+    ret
+}
+
+fn set_last_error(code: isize, msg: String) {
+    LAST_ERROR.with(|e| {
+        let mut r = e.borrow_mut();
+        r.code = code;
+        r.msg = msg;
+    });
 }
