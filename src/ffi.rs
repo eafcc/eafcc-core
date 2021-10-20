@@ -31,6 +31,7 @@ pub struct EAFCCError {
 struct InternalLastError {
     pub msg: String,
     pub code: isize,
+    c_string: CString,
     exposed_error: EAFCCError,
 }
 
@@ -42,26 +43,26 @@ pub extern "C" fn new_config_center_client(cfg: *const c_char) -> *const CFGCent
     };
 
     let cfg = match serde_json::from_slice::<serde_json::Value>(t.to_bytes()) {
-        Err(_) => return ptr::null(),
+        Err(e) => {set_last_error(0, e.to_string());return ptr::null()},
         Ok(t) => t,
     };
 
     let backend_cfg = match cfg.get("storage_backend") {
-        None => return ptr::null(),
+        None => {set_last_error(0, "must set storage_backend field in the config file.".to_string());return ptr::null()},
         Some(t) => t,
     };
 
     let mut backend = match build_storage_backend_from_cfg(backend_cfg) {
-        Err(_) => return ptr::null(),
+        Err(e) => {set_last_error(0, e.to_string());return ptr::null()},
         Ok(t) => t,
     };
 
-    if let Ok(cc) = cfg_center::CFGCenter::new(backend) {
-        let ret = Box::new(cc);
-        return Box::into_raw(ret);
-    } else {
-        // TODO set error
-        return ptr::null_mut();
+    match cfg_center::CFGCenter::new(backend) {
+        Ok(cc) => {
+            let ret = Box::new(cc);
+            return Box::into_raw(ret);
+        },
+        Err(e) => {set_last_error(0, e.to_string());return ptr::null()},
     }
 }
 
@@ -85,10 +86,9 @@ pub extern "C" fn create_namespace(
 
     let namespace = unsafe {
         assert!(!namespace.is_null());
-        if let Ok(t) = CStr::from_ptr(namespace).to_str() {
-            t
-        } else {
-            return ptr::null_mut();
+        match CStr::from_ptr(namespace).to_str() {
+            Ok(t) => t,
+            Err(e) => {set_last_error(0, e.to_string());return ptr::null()},
         }
     };
 
@@ -102,10 +102,12 @@ pub extern "C" fn create_namespace(
         None
     };
 
-    if let Ok(ns) = cc.create_namespace_scoped_cfg_center(namespace, notify_level, callback) {
-        return Arc::into_raw(ns);
-    } else {
-        return ptr::null_mut();
+
+    match cc.create_namespace_scoped_cfg_center(namespace, notify_level, callback) {
+        Ok(ns) => {
+            return Arc::into_raw(ns);
+        }, 
+        Err(e) => {set_last_error(0, e.to_string());return ptr::null()},
     }
 }
 
@@ -215,7 +217,7 @@ pub extern "C" fn get_config(
 
     let (whoami, keys) = match convert_get_cfg_input_value(whoami, keys, key_cnt) {
         Ok((whoami, keys)) => (whoami, keys),
-        Err(_) => return ptr::null_mut(),
+       Err(e) => {set_last_error(0, e.to_string());return ptr::null_mut()},
     };
 
     let values = match ns.get_cfg(
@@ -225,12 +227,12 @@ pub extern "C" fn get_config(
         if need_explain == 0 { false } else { true },
     ) {
         Ok(values) => values,
-        Err(_) => return ptr::null_mut(),
+       Err(e) => {set_last_error(0, e.to_string());return ptr::null_mut()},
     };
 
     match convert_get_cfg_output_value(values) {
         Ok(p) => return p,
-        Err(_) => return ptr::null_mut(),
+       Err(e) => {set_last_error(0, e.to_string());return ptr::null_mut()},
     }
 }
 
@@ -393,7 +395,7 @@ pub extern "C" fn differ_get_from_old(
 
     let (whoami, keys) = match convert_get_cfg_input_value(whoami, keys, key_cnt) {
         Ok((whoami, keys)) => (whoami, keys),
-        Err(_) => return ptr::null_mut(),
+       Err(e) => {set_last_error(0, e.to_string());return ptr::null_mut()},
     };
 
     let values = match differ.get_from_old(
@@ -403,12 +405,12 @@ pub extern "C" fn differ_get_from_old(
         if need_explain == 0 { false } else { true },
     ) {
         Ok(values) => values,
-        Err(_) => return ptr::null_mut(),
+       Err(e) => {set_last_error(0, e.to_string());return ptr::null_mut()},
     };
 
     match convert_get_cfg_output_value(values) {
         Ok(p) => return p,
-        Err(_) => return ptr::null_mut(),
+       Err(e) => {set_last_error(0, e.to_string());return ptr::null_mut()},
     }
 }
 
@@ -428,7 +430,7 @@ pub extern "C" fn differ_get_from_new(
 
     let (whoami, keys) = match convert_get_cfg_input_value(whoami, keys, key_cnt) {
         Ok((whoami, keys)) => (whoami, keys),
-        Err(_) => return ptr::null_mut(),
+       Err(e) => {set_last_error(0, e.to_string());return ptr::null_mut()},
     };
 
     let values = match differ.get_from_new(
@@ -438,17 +440,17 @@ pub extern "C" fn differ_get_from_new(
         if need_explain == 0 { false } else { true },
     ) {
         Ok(values) => values,
-        Err(_) => return ptr::null_mut(),
+       Err(e) => {set_last_error(0, e.to_string());return ptr::null_mut()},
     };
 
     match convert_get_cfg_output_value(values) {
         Ok(p) => return p,
-        Err(_) => return ptr::null_mut(),
+       Err(e) => {set_last_error(0, e.to_string());return ptr::null_mut()},
     }
 }
 
 thread_local!(static LAST_ERROR: RefCell<InternalLastError> = RefCell::new(
-    InternalLastError{code: 0, msg:"".to_string(), exposed_error: EAFCCError{msg:ptr::null(), code:0}}
+    InternalLastError{code: 0, msg:"".to_string(), exposed_error: EAFCCError{msg:ptr::null(), code:0}, c_string:CString::default()}
 ));
 
 #[no_mangle]
@@ -456,8 +458,9 @@ pub extern "C" fn get_last_error() -> *const EAFCCError {
     let mut ret: *const EAFCCError = ptr::null();
     LAST_ERROR.with(|e|{
        let mut r = e.borrow_mut() ;
+       r.c_string = CString::new(r.msg.clone()).unwrap_or_default();
        r.exposed_error.code = r.code;
-       r.exposed_error.msg = r.msg.as_ptr() as *const c_char;
+       r.exposed_error.msg = r.c_string.as_ptr() as *const c_char;
        ret = &r.exposed_error as *const EAFCCError;
     });
     ret
